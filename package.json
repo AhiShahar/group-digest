@@ -9,7 +9,9 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "test": "vitest run",
-    "icons": "pwa-assets-generator"
+    "icons": "pwa-assets-generator",
+    "build:android-web": "VITE_TARGET=android vite build",
+    "build:apk": "npm run build:android-web && bash android/build.sh"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.10.0",

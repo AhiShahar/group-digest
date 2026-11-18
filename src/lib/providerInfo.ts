@@ -20,8 +20,24 @@ export interface ProviderInfo {
 
 export const PROVIDERS: ProviderInfo[] = [
   {
+    id: 'openrouter',
+    label: 'Free: sign in with OpenRouter',
+    keyHelp: 'One tap, no card needed. Uses free models (about 50 requests a day). Add OpenRouter credits later to use Claude, GPT or Gemini with the same sign-in.',
+    keyUrl: 'https://openrouter.ai/keys',
+    defaultModel: 'openrouter/free',
+    needsKey: true,
+  },
+  {
+    id: 'gemini',
+    label: 'Free: Google Gemini key',
+    keyHelp: 'Free, no card needed: sign in to Google AI Studio, tap Create API key, and paste it here. Google may use free-tier content to improve its products.',
+    keyUrl: 'https://aistudio.google.com/apikey',
+    defaultModel: 'gemini-2.5-flash',
+    needsKey: true,
+  },
+  {
     id: 'anthropic',
-    label: 'Claude (Anthropic API key)',
+    label: 'Claude (paid API key)',
     keyHelp: 'Create a key in the Claude Console. A Claude.ai Pro or Max subscription cannot be used by other apps.',
     keyUrl: 'https://platform.claude.com/settings/keys',
     defaultModel: 'claude-opus-5-5',
@@ -29,26 +45,10 @@ export const PROVIDERS: ProviderInfo[] = [
   },
   {
     id: 'openai',
-    label: 'OpenAI (API key)',
+    label: 'OpenAI (paid API key)',
     keyHelp: 'Create a key on the OpenAI platform. Usage is billed to that account.',
     keyUrl: 'https://platform.openai.com/api-keys',
     defaultModel: 'gpt-5-mini',
-    needsKey: true,
-  },
-  {
-    id: 'gemini',
-    label: 'Google Gemini (API key)',
-    keyHelp: 'Create a key in Google AI Studio. It has a free tier with rate limits.',
-    keyUrl: 'https://aistudio.google.com/apikey',
-    defaultModel: 'gemini-2.5-flash',
-    needsKey: true,
-  },
-  {
-    id: 'openrouter',
-    label: 'OpenRouter (sign in)',
-    keyHelp: 'Sign in with OpenRouter to use Claude, GPT, Gemini and others on your own OpenRouter credits.',
-    keyUrl: 'https://openrouter.ai/keys',
-    defaultModel: 'openrouter/auto',
     needsKey: true,
   },
   {

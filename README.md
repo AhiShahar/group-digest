@@ -22,6 +22,19 @@ There is no backend. Chats, digests and keys are stored in the browser's Indexed
 | OpenRouter | **Sign in with OpenRouter** (OAuth PKCE) | The real "sign in" option: one login gives Claude, GPT, Gemini and more, billed to the user's OpenRouter credits. |
 | Local / other | Any OpenAI-compatible URL | Ollama, LM Studio, vLLM. For Ollama on the same computer set `OLLAMA_ORIGINS` to the app's origin. |
 
+## Android APK (no hosting needed)
+
+`android/` is a small native wrapper (one WebView activity, no Gradle) that bundles the app inside the APK. It adds Android touches: WhatsApp's share sheet imports straight into the app, "Add to calendar" opens the phone's calendar with the event filled in, and summaries share through the normal share sheet.
+
+```bash
+# one-time on Ubuntu: sudo apt install android-sdk android-sdk-platform-23 dalvik-exchange apksigner zipalign openjdk-21-jdk
+npm run build:apk     # writes android/dist/group-digest-<version>.apk
+```
+
+The first build creates a test signing key at `android/group-digest-test.keystore`. Keep it: Android only installs updates signed with the same key. Set `KEYSTORE` and `KS_PASS` to use another.
+
+**Installing the APK:** send the file to the phone (WhatsApp, email, Drive), tap it, allow "Install unknown apps" for the app you opened it from when asked, then tap Install. If Play Protect warns about an unknown developer, choose "Install anyway". Android 7 or newer.
+
 ## Develop
 
 ```bash

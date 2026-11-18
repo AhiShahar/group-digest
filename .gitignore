@@ -22,3 +22,9 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Android wrapper build outputs and the test signing key
+android/build
+android/dist
+android/assets/www
+android/*.keystore

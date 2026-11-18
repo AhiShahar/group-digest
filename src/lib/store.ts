@@ -99,10 +99,10 @@ export async function setKv(key: string, value: unknown): Promise<void> {
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  provider: 'anthropic',
+  provider: 'openrouter',
   apiKey: '',
   baseUrl: 'http://localhost:11434/v1',
-  model: 'claude-opus-5-5',
+  model: 'openrouter/free',
   language: 'English',
   retentionDays: 30,
   notify: true,

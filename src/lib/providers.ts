@@ -44,7 +44,9 @@ export async function listModels(s: ProviderSettings): Promise<string[]> {
       const res = await fetch('https://openrouter.ai/api/v1/models');
       await assertOk(res);
       const data = (await res.json()) as { data: { id: string }[] };
-      return ['openrouter/auto', ...data.data.map((m) => m.id)];
+      const ids = data.data.map((m) => m.id);
+      // free models first, so the list is useful without credits
+      return ['openrouter/free', ...ids.filter((id) => id.endsWith(':free')), 'openrouter/auto', ...ids.filter((id) => !id.endsWith(':free'))];
     }
     default: {
       const res = await fetch(`${openAiBase(s)}/models`, { headers: bearer(s) });
@@ -165,7 +167,8 @@ async function assertOk(res: Response): Promise<void> {
     detail = res.statusText;
   }
   if (res.status === 401 || res.status === 403) throw new Error(`The provider rejected the key (${res.status}). ${detail}`);
-  if (res.status === 429) throw new Error(`Rate limited or out of credit (429). ${detail}`);
+  if (res.status === 429) throw new Error(`The AI is busy or the free daily limit is used up (429). Try again in a minute, or tomorrow. ${detail}`);
+  if (res.status === 402) throw new Error(`The AI account has no credit left (402). ${detail}`);
   throw new Error(`Provider error ${res.status}: ${detail}`);
 }
 

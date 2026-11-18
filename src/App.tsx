@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { buildIcs, downloadFile, googleCalendarUrl, outlookCalendarUrl, safeFilename } from './lib/calendar';
 import type { Digest, DigestEvent } from './lib/digest';
+import { addEventNative, bridge, isAndroidApp, takeNativeShare } from './lib/android';
 import { finishOpenRouterSignIn, startOpenRouterSignIn } from './lib/openrouter';
 import { parseChatText, readExportFile } from './lib/parser';
 import { PROVIDERS, providerInfo, type ProviderId } from './lib/providerInfo';
@@ -81,7 +82,7 @@ export default function App() {
       try {
         const key = await finishOpenRouterSignIn();
         if (key) {
-          s = { ...s, provider: 'openrouter', apiKey: key, model: s.provider === 'openrouter' ? s.model : 'openrouter/auto' };
+          s = { ...s, provider: 'openrouter', apiKey: key, model: s.provider === 'openrouter' && s.model ? s.model : 'openrouter/free' };
           await saveSettings(s);
           setToast('Signed in with OpenRouter.');
           setView({ name: 'settings' });
@@ -98,13 +99,24 @@ export default function App() {
         const files = await takeSharedFiles();
         if (files.length) await importFiles(files);
       }
+      const native = takeNativeShare();
+      if (native) await importFiles([native]);
     })();
+    // The Android app fires this when WhatsApp shares a chat while it is open.
+    const onNativeShare = () => {
+      const f = takeNativeShare();
+      if (f) importFiles([f]);
+    };
+    window.addEventListener('groupdigest-share', onNativeShare);
     const onPrompt = (e: Event) => {
       e.preventDefault();
       setInstallEvt(e as BeforeInstallPromptEvent);
     };
     window.addEventListener('beforeinstallprompt', onPrompt);
-    return () => window.removeEventListener('beforeinstallprompt', onPrompt);
+    return () => {
+      window.removeEventListener('beforeinstallprompt', onPrompt);
+      window.removeEventListener('groupdigest-share', onNativeShare);
+    };
   }, [importFiles, refreshChats]);
 
   useEffect(() => {
@@ -139,12 +151,13 @@ export default function App() {
 
       <main>
         {needsSetup && view.name !== 'settings' && (
-          <div className="banner">
-            <span>Connect your AI first. You bring your own key, so summaries are billed to you and your chats never touch our servers.</span>
-            <button className="primary" onClick={() => setView({ name: 'settings' })}>
-              Set up AI
-            </button>
-          </div>
+          <Onboarding
+            onGemini={async () => {
+              await updateSettings({ ...settings, provider: 'gemini', apiKey: '', model: providerInfo('gemini').defaultModel });
+              setView({ name: 'settings' });
+            }}
+            onOther={() => setView({ name: 'settings' })}
+          />
         )}
         {installEvt && (
           <div className="banner subtle">
@@ -179,6 +192,27 @@ export default function App() {
           {toast}
         </div>
       )}
+    </div>
+  );
+}
+
+// ---------------- First run ----------------
+
+function Onboarding({ onGemini, onOther }: { onGemini: () => void; onOther: () => void }) {
+  return (
+    <div className="card onboard">
+      <h2>Step 1: connect a free AI</h2>
+      <p className="muted small">Your chats go straight from this device to the AI you pick. Nothing is stored on our side.</p>
+      <button className="primary big" onClick={() => startOpenRouterSignIn()}>
+        Sign in with OpenRouter (free)
+      </button>
+      <p className="muted small">Sign in or make a free account in one step. No card, no key to copy. Free models allow about 50 requests a day, and one summary is usually one request.</p>
+      <div className="row">
+        <button onClick={onGemini}>Use a free Gemini key</button>
+        <button className="link" onClick={onOther}>
+          I have a Claude or OpenAI key
+        </button>
+      </div>
     </div>
   );
 }
@@ -227,7 +261,7 @@ function ChatList({ chats, onImport, onOpen }: { chats: StoredChat[]; onImport: 
               Scroll down and tap <b>Export chat</b>, then <b>Without media</b>.
             </li>
             <li>
-              <b>Android:</b> pick <b>Group Digest</b> in the share sheet (after installing the app), or save the file and import it here.
+              <b>Android:</b> pick <b>Group Digest</b> in the share sheet{isAndroidApp ? '' : ' (after installing the app)'}, or save the file and import it here.
             </li>
             <li>
               <b>iPhone:</b> choose <b>Save to Files</b>, then tap <b>Import chat export</b> here and pick the .zip.
@@ -387,7 +421,7 @@ function ChatView(props: {
             {busy ?? `Summarize ${selected.length} messages`}
           </button>
           <span className="muted small">
-            Using {providerInfo(settings.provider).label.split(' (')[0]} · {settings.model}
+            Using {settings.model}
           </span>
         </div>
         {!selected.length && chat.messages.length > 0 && <p className="muted small">No new messages in this range. Import a newer export.</p>}
@@ -435,7 +469,8 @@ function DigestCard({ rec, chatName, open, onToast }: { rec: StoredDigest; chatN
   const share = async () => {
     const text = digestAsText(chatName, d);
     try {
-      if (navigator.share) await navigator.share({ text });
+      if (bridge) bridge.shareText(text);
+      else if (navigator.share) await navigator.share({ text });
       else {
         await navigator.clipboard.writeText(text);
         onToast('Summary copied.');
@@ -445,7 +480,10 @@ function DigestCard({ rec, chatName, open, onToast }: { rec: StoredDigest; chatN
     }
   };
   const allIcs = async () => {
-    downloadFile(`${safeFilename(chatName)}-events.ics`, await buildIcs(d.events, chatName), 'text/calendar');
+    const name = `${safeFilename(chatName)}-events.ics`;
+    const ics = await buildIcs(d.events, chatName);
+    if (bridge) bridge.shareFile(name, 'text/calendar', ics);
+    else downloadFile(name, ics, 'text/calendar');
   };
   return (
     <details className="card digest" open={open}>
@@ -519,19 +557,19 @@ function EventRow({ e, chatName }: { e: DigestEvent; chatName: string }) {
     ...(e.start_time ? { hour: '2-digit', minute: '2-digit' } : {}),
   });
   const ics = async () => downloadFile(`${safeFilename(e.title)}.ics`, await buildIcs([e], chatName), 'text/calendar');
+  if (isAndroidApp) {
+    return (
+      <li className={`event ${e.confidence}`}>
+        <EventInfo e={e} when={when} />
+        <div className="event-actions">
+          <button onClick={() => addEventNative(e, chatName)}>Add to calendar</button>
+        </div>
+      </li>
+    );
+  }
   return (
     <li className={`event ${e.confidence}`}>
-      <div className="event-main">
-        <span className="name">{e.title}</span>
-        <span className="small">
-          {when}
-          {e.end_time ? ` to ${e.end_time}` : ''}
-          {e.location ? ` · ${e.location}` : ''}
-        </span>
-        {e.notes && <span className="small muted">{e.notes}</span>}
-        <span className="small muted quote">“{e.source_quote}”</span>
-        {e.confidence !== 'high' && <span className="small warn">{e.confidence} confidence, check the date</span>}
-      </div>
+      <EventInfo e={e} when={when} />
       <div className="event-actions">
         <a className="btn" href={googleCalendarUrl(e, chatName)} target="_blank" rel="noreferrer">
           Google
@@ -544,6 +582,22 @@ function EventRow({ e, chatName }: { e: DigestEvent; chatName: string }) {
         </a>
       </div>
     </li>
+  );
+}
+
+function EventInfo({ e, when }: { e: DigestEvent; when: string }) {
+  return (
+      <div className="event-main">
+        <span className="name">{e.title}</span>
+        <span className="small">
+          {when}
+          {e.end_time ? ` to ${e.end_time}` : ''}
+          {e.location ? ` · ${e.location}` : ''}
+        </span>
+        {e.notes && <span className="small muted">{e.notes}</span>}
+        <span className="small muted quote">“{e.source_quote}”</span>
+        {e.confidence !== 'high' && <span className="small warn">{e.confidence} confidence, check the date</span>}
+      </div>
   );
 }
 
@@ -617,7 +671,7 @@ function Settings({
           {info.keyHelp}{' '}
           {info.keyUrl && settings.provider !== 'openrouter' && (
             <a href={info.keyUrl} target="_blank" rel="noreferrer">
-              Get a key
+              {settings.provider === 'gemini' ? 'Get a free key' : 'Get a key'}
             </a>
           )}
         </p>
@@ -690,10 +744,10 @@ function Settings({
             <option value={0}>Forever</option>
           </select>
         </label>
-        <div className="row">
+        {!isAndroidApp && <div className="row">
           <button onClick={askNotify}>{settings.notify && 'Notification' in window && Notification.permission === 'granted' ? 'Notifications on' : 'Turn on notifications'}</button>
           <span className="muted small">Notifies you when a long digest finishes in the background.</span>
-        </div>
+        </div>}
       </div>
 
       <h2>Privacy</h2>

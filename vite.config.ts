@@ -2,12 +2,17 @@ import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
+// The Android wrapper bundles the app itself, so it skips the service worker.
+const android = process.env.VITE_TARGET === 'android'
+
 // base './' lets the same build run at a domain root or under /repo-name/ on GitHub Pages.
 export default defineConfig({
   base: './',
+  build: android ? { outDir: 'android/assets/www', emptyOutDir: true } : {},
   plugins: [
     react(),
     VitePWA({
+      disable: android,
       strategies: 'injectManifest',
       srcDir: 'src',
       filename: 'sw.ts',
