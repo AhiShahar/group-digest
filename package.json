@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.10.0",
+    "@fontsource-variable/plus-jakarta-sans": "^5.3.0",
     "jszip": "^3.10.2",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
