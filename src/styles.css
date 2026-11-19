@@ -214,3 +214,8 @@ input, select { border-radius: 14px; }
 .error-box details p { margin: 4px 0 0; overflow-wrap: anywhere; }
 
 button.on-chip { background: var(--brand-soft); color: var(--brand); }
+
+/* "Update this group" nudge */
+.nudge { display: flex; flex-direction: column; gap: 4px; background: color-mix(in srgb, var(--dot-3) 12%, var(--card)); }
+.nudge .steps { margin: 6px 0 0; font-size: 14.5px; }
+.drop h3 { margin-top: 14px; }

@@ -8,6 +8,8 @@ import { finishOpenRouterSignIn, startOpenRouterSignIn } from './lib/openrouter'
 import { parseChatText, readExportFile } from './lib/parser';
 import { PROVIDERS, providerInfo, type ProviderId } from './lib/providerInfo';
 import { rankModels } from './lib/models';
+import { findMatchingChat } from './lib/match';
+import { ExportSteps, OpenWhatsApp, UpdateNudge } from './ExportHelp';
 import { DEFAULT_REMINDERS } from './lib/reminders';
 import { disablePush } from './lib/webpush';
 import { RemindAllButton, ReminderButton, ReminderSettings, RemindersContext, useReminderPrefs } from './Reminders';
@@ -100,21 +102,25 @@ export default function App() {
   const [iosInstall, setIosInstall] = useState(shouldShowIosInstall);
 
   const refreshChats = useCallback(async () => setChats(await listChats()), []);
+  const [importTick, setImportTick] = useState(0);
 
   const importFiles = useCallback(
-    async (files: File[]) => {
+    async (files: File[], targetId?: string) => {
       let lastId: string | null = null;
       for (const file of files) {
         try {
           const { text, name } = await readExportFile(file);
           const parsed = parseChatText(text, name);
           if (!parsed.messages.length) throw new Error(`No messages found in ${file.name}. Is it a WhatsApp export?`);
-          const existing = (await listChats()).find((c) => c.name === parsed.name);
+          const all = await listChats();
+          // "Import update" inside a group adds to that group; otherwise find the group by name or shared messages.
+          const existing = (targetId && all.find((c) => c.id === targetId)) || findMatchingChat(all, parsed.name, parsed.messages);
           if (existing) {
             const merged = mergeMessages(existing.messages, parsed.messages);
             await putChat({ ...existing, messages: merged, importedAt: Date.now() });
             lastId = existing.id;
-            setToast(`Updated "${parsed.name}": ${merged.length - existing.messages.length} new messages.`);
+            const added = merged.length - existing.messages.length;
+            setToast(`Updated "${existing.name}": ${added ? `${added} new message${added === 1 ? '' : 's'}` : 'no new messages since last time'}.`);
           } else {
             const id = newId();
             await putChat({ id, name: parsed.name, importedAt: Date.now(), messages: parsed.messages, focus: '', lastDigestEnd: null });
@@ -126,6 +132,7 @@ export default function App() {
         }
       }
       await refreshChats();
+      setImportTick((t) => t + 1);
       if (lastId) setView({ name: 'chat', id: lastId });
     },
     [refreshChats],
@@ -291,7 +298,9 @@ export default function App() {
         {view.name === 'chats' && <ChatList chats={chats} onImport={importFiles} onOpen={(id) => setView({ name: 'chat', id })} />}
         {view.name === 'chat' && (
           <ChatView
+            key={`${view.id}-${importTick}`}
             id={view.id}
+            onImport={importFiles}
             settings={settings}
             onBack={() => setView({ name: 'chats' })}
             onChanged={refreshChats}
@@ -370,7 +379,10 @@ function ChatList({ chats, onImport, onOpen }: { chats: StoredChat[]; onImport: 
         }}
       >
         <h2>Add a group</h2>
-        <p className="muted">Import a WhatsApp chat export (.txt or .zip). It stays on this device.</p>
+        <p className="muted">
+          Import a WhatsApp chat export (.txt or .zip, several at once is fine). Exporting the same group again adds only the new messages. It stays on
+          this device.
+        </p>
         <button className="primary" onClick={() => input.current?.click()}>
           Import chat export
         </button>
@@ -385,22 +397,20 @@ function ChatList({ chats, onImport, onOpen }: { chats: StoredChat[]; onImport: 
             e.target.value = '';
           }}
         />
-        <details className="howto">
-          <summary>How to export a group from WhatsApp</summary>
-          <ol>
-            <li>Open the group in WhatsApp and tap its name at the top.</li>
-            <li>
-              Scroll down and tap <b>Export chat</b>, then <b>Without media</b>.
-            </li>
-            <li>
-              <b>Android:</b> pick <b>Group Digest</b> in the share sheet{isAndroidApp ? '' : ' (after installing the app)'}, or save the file and import it here.
-            </li>
-            <li>
-              <b>iPhone:</b> choose <b>Save to Files</b>, then tap <b>Import chat export</b> here and pick the .zip.
-            </li>
-            <li>Next time, export again: only new messages are added.</li>
-          </ol>
-        </details>
+        {chats.length === 0 ? (
+          <>
+            <h3>How to export a group</h3>
+            <ExportSteps />
+            <div className="row">
+              <OpenWhatsApp />
+            </div>
+          </>
+        ) : (
+          <details className="howto">
+            <summary>How to export a group from WhatsApp</summary>
+            <ExportSteps />
+          </details>
+        )}
       </div>
 
       {chats.length > 0 && <h2 className="list-title">Your groups</h2>}
@@ -439,8 +449,10 @@ function ChatView(props: {
   onChanged: () => void;
   onToast: (s: string) => void;
   onNeedSetup: () => void;
+  onImport: (files: File[], targetId?: string) => void;
 }) {
-  const { id, settings, onBack, onChanged, onToast, onNeedSetup } = props;
+  const { id, settings, onBack, onChanged, onToast, onNeedSetup, onImport } = props;
+  const pick = useRef<HTMLInputElement>(null);
   const [chat, setChat] = useState<StoredChat | null>(null);
   const [digests, setDigests] = useState<StoredDigest[]>([]);
   const [range, setRange] = useState<Range>('7');
@@ -529,6 +541,20 @@ function ChatView(props: {
         {chat.messages.length} messages stored
         {chat.lastDigestEnd ? ` · last digest covered up to ${fmtDate(chat.lastDigestEnd)}` : ''}
       </p>
+
+      {!captureStatus()?.selected.includes(chat.name) && (
+        <UpdateNudge group={chat.name} lastTs={chat.messages[chat.messages.length - 1]?.ts} onPick={() => pick.current?.click()} />
+      )}
+      <input
+        ref={pick}
+        type="file"
+        accept=".txt,.zip,text/plain,application/zip"
+        hidden
+        onChange={(e) => {
+          onImport([...(e.target.files ?? [])], chat.id);
+          e.target.value = '';
+        }}
+      />
 
       <div className="card">
         <label>
