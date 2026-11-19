@@ -34,7 +34,7 @@ export interface CapturedMessage {
 
 export const bridge: AndroidBridge | undefined = (window as unknown as { AndroidBridge?: AndroidBridge }).AndroidBridge;
 export const isAndroidApp = !!bridge;
-export const canCapture = !!bridge?.captureStatus;
+
 
 export function captureStatus(): CaptureStatus | null {
   if (!bridge?.captureStatus) return null;
@@ -44,6 +44,9 @@ export function captureStatus(): CaptureStatus | null {
     return null;
   }
 }
+
+/** False in the browser and in the lite APK, which has no notification access. */
+export const canCapture = captureStatus() !== null;
 
 /** Read messages captured since last time. Call ackCaptured() once they are stored. */
 export function peekCaptured(): CapturedMessage[] {

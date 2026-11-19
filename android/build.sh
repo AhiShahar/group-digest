@@ -10,10 +10,12 @@ cd "$(dirname "$0")"
 SDK="${ANDROID_HOME:-/usr/lib/android-sdk}"
 PLATFORM="${ANDROID_JAR:-$SDK/platforms/android-23/android.jar}"
 VERSION_NAME="${VERSION_NAME:-$(node -p "require('../package.json').version")}"
-VERSION_CODE="${VERSION_CODE:-$(date +%y%m%d%H)}"
+VERSION_CODE="${VERSION_CODE:-$(( $(date +%s) / 60 ))}"  # minutes since 1970: always increases
 KEYSTORE="${KEYSTORE:-./group-digest-test.keystore}"
 KS_PASS="${KS_PASS:-groupdigest}"
-OUT="${OUT:-./dist/group-digest-${VERSION_NAME}.apk}"
+VARIANT="${VARIANT:-full}"   # full = with automatic capture, lite = without notification access
+SUFFIX=""; [ "$VARIANT" = lite ] && SUFFIX="-lite"
+OUT="${OUT:-./dist/group-digest-${VERSION_NAME}${SUFFIX}.apk}"
 
 [ -f assets/www/index.html ] || { echo "Run npm run build:android-web first"; exit 1; }
 
@@ -27,7 +29,12 @@ if [ ! -f "$KEYSTORE" ]; then
 fi
 
 # 1. Resources and manifest. Compiled against API 23, targets API 34.
-aapt package -f -m -M AndroidManifest.xml -S res -A assets -I "$PLATFORM" -J build/gen \
+MANIFEST=AndroidManifest.xml
+if [ "$VARIANT" = lite ]; then
+  sed '/CAPTURE-START/,/CAPTURE-END/d' AndroidManifest.xml > build/AndroidManifest.xml
+  MANIFEST=build/AndroidManifest.xml
+fi
+aapt package -f -m -M "$MANIFEST" -S res -A assets -I "$PLATFORM" -J build/gen \
   --min-sdk-version 24 --target-sdk-version 34 \
   --version-code "$VERSION_CODE" --version-name "$VERSION_NAME" \
   -F build/app.unaligned.apk

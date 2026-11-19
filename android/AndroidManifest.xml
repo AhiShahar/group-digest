@@ -37,7 +37,7 @@
             </intent-filter>
         </activity>
 
-        <!-- Optional: reads WhatsApp notifications from groups the user picks -->
+        <!-- CAPTURE-START: only in the full build (Play Protect blocks this permission for sideloaded apps in some countries) -->
         <service
             android:name=".CaptureService"
             android:label="@string/capture_label"
@@ -47,6 +47,7 @@
                 <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
         </service>
+        <!-- CAPTURE-END -->
 
         <provider
             android:name=".FilesProvider"

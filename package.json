@@ -1,7 +1,7 @@
 {
   "name": "group-digest",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,7 +11,7 @@
     "test": "vitest run",
     "icons": "pwa-assets-generator",
     "build:android-web": "VITE_TARGET=android vite build",
-    "build:apk": "npm run build:android-web && bash android/build.sh"
+    "build:apk": "npm run build:android-web && bash android/build.sh && VARIANT=lite bash android/build.sh"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.10.0",

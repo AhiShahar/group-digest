@@ -35,6 +35,8 @@ The first build creates a test signing key at `android/group-digest-test.keystor
 
 **Automatic capture (Android app only):** with notification access, the app saves messages from the WhatsApp groups the user ticks, as their notifications arrive (`CaptureService`). Private chats and unticked groups are ignored. It cannot see older history, muted groups, or messages read while the chat is open, and WhatsApp's notification previews must be on. Messages wait in a private file until the app stores them in IndexedDB, then merge with exports (duplicates are dropped). On Android 13+ a sideloaded app must first get App info > ⋮ > Allow restricted settings.
 
+**Two APKs:** `npm run build:apk` writes `group-digest-<v>.apk` (full, with automatic capture) and `group-digest-<v>-lite.apk` (no notification access). Google Play Protect automatically blocks sideloaded apps that declare a notification listener when they are installed from a browser, messaging app or file manager, in some countries ([Google's guidance](https://developers.google.com/android/play-protect/warning-dev-guidance)). The lite APK avoids that block. To install the full APK where it is blocked: `adb install group-digest-<v>.apk` from a computer, or turn off Play Store > Play Protect > Scan apps with Play Protect, install, then turn it back on. Both use the same package and key, so either can be installed over the other.
+
 **Installing the APK:** send the file to the phone (WhatsApp, email, Drive), tap it, allow "Install unknown apps" for the app you opened it from when asked, then tap Install. If Play Protect warns about an unknown developer, choose "Install anyway". Android 7 or newer.
 
 ## Develop

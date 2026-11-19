@@ -344,6 +344,12 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public String captureStatus() {
+            // The lite build has no listener in its manifest: report capture as unavailable.
+            try {
+                getPackageManager().getServiceInfo(new android.content.ComponentName(MainActivity.this, CaptureService.class), 0);
+            } catch (Exception e) {
+                return "";
+            }
             return CaptureStore.status(MainActivity.this);
         }
 

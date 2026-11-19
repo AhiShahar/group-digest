@@ -868,6 +868,11 @@ function Settings({
       </div>
 
       {canCapture && <LiveCapture chats={chats} />}
+      {isAndroidApp && !canCapture && (
+        <p className="muted small">
+          This is the lite version. To save WhatsApp messages automatically instead of exporting, install the full version of Group Digest.
+        </p>
+      )}
 
       <h2>Privacy</h2>
       <div className="card">
