@@ -77,7 +77,10 @@ function SetupSteps({ p, onToast }: { p: SyncPairing; onToast: (s: string) => vo
             </a>{' '}
             (sign up for the Always Free tier first if you have no account).
           </li>
-          <li>Keep the defaults: an "Always Free-eligible" shape and Ubuntu or Oracle Linux.</li>
+          <li>
+            Image: <b>Ubuntu 24.04</b>. Shape: <b>Ampere VM.Standard.A1.Flex</b> with 1 OCPU and 1 GB memory (if it says out of capacity, use{' '}
+            <b>VM.Standard.E2.1.Micro</b>). SSH keys: <b>No SSH keys</b> is fine.
+          </li>
           <li>
             Under <b>Show advanced options</b>, <b>Management</b>, choose <b>Paste cloud-init script</b> and paste the script below.
           </li>
