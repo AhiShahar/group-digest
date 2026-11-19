@@ -1,4 +1,5 @@
 import type { DigestEvent } from './digest';
+import { icsAlarms, type ReminderPrefs } from './reminders';
 
 const p2 = (n: number) => String(n).padStart(2, '0');
 
@@ -61,7 +62,7 @@ function describe(e: DigestEvent, chatName: string): string {
   return [e.notes, `From WhatsApp group "${chatName}": "${e.source_quote}"`].filter(Boolean).join('\n\n');
 }
 
-export async function buildIcs(events: DigestEvent[], chatName: string): Promise<string> {
+export async function buildIcs(events: DigestEvent[], chatName: string, reminders?: ReminderPrefs): Promise<string> {
   const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Group Digest//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH'];
   const now = utc(new Date());
   for (const e of events) {
@@ -77,6 +78,7 @@ export async function buildIcs(events: DigestEvent[], chatName: string): Promise
     lines.push(`SUMMARY:${escapeText(e.title)}`);
     if (e.location) lines.push(`LOCATION:${escapeText(e.location)}`);
     lines.push(`DESCRIPTION:${escapeText(describe(e, chatName))}`);
+    if (reminders) lines.push(...icsAlarms(e, reminders));
     lines.push('END:VEVENT');
   }
   lines.push('END:VCALENDAR');
