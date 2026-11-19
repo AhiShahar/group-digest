@@ -12,7 +12,7 @@
   --chip: #f0f5f3;
   --glow-a: #d4f5e7;
   --glow-b: #fde9c8;
-  --top: rgba(238, 247, 243, 0.96);
+  --top: #eef7f3;
   --shadow: rgba(16, 60, 45, 0.25);
   --event: #f6faf8;
   --due-bg: #fff1d6;
@@ -29,29 +29,30 @@
   line-height: 1.45;
 }
 @media (prefers-color-scheme: dark) {
+  /* Dark mode uses the "Dusk" look: plum night, violet and coral glow, see-through cards. */
   :root {
-    --bg: #0d1714;
-    --card: #15221e;
-    --text: #e6f1ed;
-    --muted: #93a8a1;
-    --line: #22332d;
-    --brand: #2fd3ad;
-    --brand-2: #1fb3a6;
-    --brand-ink: #04201a;
-    --brand-soft: #16362e;
-    --chip: #1d2c27;
-    --glow-a: #123a2f;
-    --glow-b: #3a2c16;
-    --top: rgba(13, 23, 20, 0.96);
-    --shadow: rgba(0, 0, 0, 0.55);
-    --event: #1a2a25;
-    --due-bg: #3d2f12;
-    --due-ink: #ffcf7a;
-    --dot-2: #a08bff;
-    --dot-3: #ffb54d;
+    --bg: #171329;
+    --card: rgba(255, 255, 255, 0.05);
+    --text: #eef0f8;
+    --muted: #9c99b3;
+    --line: rgba(255, 255, 255, 0.1);
+    --brand: #ff9b85;
+    --brand-2: #ff7f6b;
+    --brand-ink: #2a0f0a;
+    --brand-soft: rgba(255, 155, 133, 0.14);
+    --chip: rgba(255, 255, 255, 0.07);
+    --glow-a: rgba(150, 110, 255, 0.35);
+    --glow-b: rgba(255, 140, 120, 0.28);
+    --top: #171329;
+    --shadow: rgba(0, 0, 0, 0.5);
+    --event: rgba(255, 255, 255, 0.04);
+    --due-bg: rgba(150, 110, 255, 0.24);
+    --due-ink: #d2c9ff;
+    --dot-2: #a98bff;
+    --dot-3: #ffc66b;
     --dot-4: #ff7fa8;
     --danger: #ff8a80;
-    --warn: #e3b341;
+    --warn: #ffc66b;
   }
 }
 * { box-sizing: border-box; }
@@ -188,3 +189,12 @@ input, select { border-radius: 14px; }
 .prov { border-radius: 16px; }
 .banner { border-radius: 18px; }
 .banner.subtle { border: 0; box-shadow: 0 6px 18px -10px var(--shadow); }
+
+/* Dusk details for dark mode */
+@media (prefers-color-scheme: dark) {
+  .card, .chats li button { backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 10px 30px -14px var(--shadow); }
+  input, select { background: rgba(0, 0, 0, 0.25); }
+  .toast { background: #eef0f8; color: #171329; }
+  .onboard { box-shadow: 0 0 0 1px rgba(255, 155, 133, 0.3), 0 20px 50px -20px rgba(255, 155, 133, 0.35); }
+  .avatar { color: #1a0f2a; }
+}
