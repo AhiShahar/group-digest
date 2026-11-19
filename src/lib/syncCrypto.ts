@@ -65,3 +65,39 @@ export function newPairing(): { room: string; secret: string } {
   const r = crypto.getRandomValues(new Uint8Array(16));
   return { room: [...r].map((b) => b.toString(16).padStart(2, '0')).join(''), secret: b64url(crypto.getRandomValues(new Uint8Array(32))) };
 }
+
+// ---- host inbox (see public/bridge/crypto.mjs) ----
+
+const hex = (b: Uint8Array) => [...b].map((x) => x.toString(16).padStart(2, '0')).join('');
+
+/** The owner's inbox room and secret, derived from the owner pairing. */
+export async function hostInbox(ownerSecretB64: string): Promise<{ room: string; secret: string }> {
+  const s = unb64url(ownerSecretB64);
+  return { room: hex(await hmac(s, 'group-digest host inbox v1')).slice(0, 32), secret: b64url(await hmac(s, 'group-digest host secret v1')) };
+}
+
+/** Seal a note so only the sync server (holder of the host private key) can read it. */
+export async function sealTo(hostPubB64: string, value: unknown): Promise<string> {
+  const eph = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+  const ephPub = new Uint8Array(await crypto.subtle.exportKey('raw', eph.publicKey));
+  const pub = await crypto.subtle.importKey('raw', unb64url(hostPubB64), { name: 'ECDH', namedCurve: 'P-256' }, false, []);
+  const bits = await crypto.subtle.deriveBits({ name: 'ECDH', public: pub }, eph.privateKey, 256);
+  const hk = await crypto.subtle.importKey('raw', bits, 'HKDF', false, ['deriveKey']);
+  const key = await crypto.subtle.deriveKey(
+    { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: enc.encode('group-digest inbox v1') },
+    hk,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt'],
+  );
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(JSON.stringify(value))));
+  const out = new Uint8Array(65 + 12 + ct.length);
+  out.set(ephPub);
+  out.set(iv, 65);
+  out.set(ct, 77);
+  return b64url(out);
+}
+
+/** A random one-time invite code. */
+export const newInviteCode = () => b64url(crypto.getRandomValues(new Uint8Array(12)));

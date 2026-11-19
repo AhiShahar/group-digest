@@ -1,355 +1,590 @@
 // Group Digest sync server.
 //
-// Links one WhatsApp account as a linked device (like WhatsApp Web), and
-// forwards new messages from the groups chosen in the app. It only makes
-// outgoing connections: to WhatsApp, and to the relay in the app's own
-// Cloudflare Worker. Everything sent to the relay is end-to-end encrypted with
-// a secret that only this server and the app know.
+// Links WhatsApp accounts as linked devices (like WhatsApp Web) and forwards
+// new messages from the groups each person chose in the app. One server can
+// host its owner plus invited friends; each person is a separate session with
+// their own WhatsApp link, their own relay room and their own encryption key,
+// so nobody can see anyone else's messages.
+//
+// It only makes outgoing connections: to WhatsApp, and to the relay in the
+// app's own Cloudflare Worker. Everything sent to the relay is end-to-end
+// encrypted; the relay never sees message text or keys.
 //
 // Message text is held in memory only until it is handed to the relay (a few
-// seconds), and is never written to disk or logs. The only thing on disk is
-// the WhatsApp link itself (auth/), so restarts reconnect without a new scan.
+// seconds), and is never written to disk or logs. On disk: each person's
+// WhatsApp link, their pairing key (so restarts reconnect), and the server's
+// own key pair for invites.
 //
 // Config: /etc/group-digest/sync.json  {"relay": "https://...", "room": "...", "secret": "..."}
 //   or env GD_RELAY, GD_ROOM, GD_SECRET.  Data dir: GD_DATA (default /var/lib/group-digest).
+//   GD_MAX_USERS: friends allowed besides the owner (default: what memory allows).
 
-import { readFileSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { spawn } from 'node:child_process';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { totalmem } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { getHeapStatistics } from 'node:v8';
 import pino from 'pino';
-import makeWASocket, {
-  Browsers,
-  DisconnectReason,
-  fetchLatestBaileysVersion,
-  useMultiFileAuthState,
-} from 'baileys';
-import { deriveKeys, open, seal } from './crypto.mjs';
-import { toRecord as parseMessage } from './parse.mjs';
+import makeWASocket, { Browsers, DisconnectReason, fetchLatestBaileysVersion, useMultiFileAuthState as loadAuthState } from 'baileys';
+import { deriveKeys, hostInbox, importHostKey, newHostKey, open, openSealed, seal } from './crypto.mjs';
+import { toRecord } from './parse.mjs';
 
-const groupNames = new Map();
-const toRecord = (msg) => parseMessage(msg, groupNames, state.me?.name);
-
-const VERSION = '0.1.0';
-const DATA = process.env.GD_DATA || '/var/lib/group-digest';
-const AUTH_DIR = join(DATA, 'auth');
-const LINK_WINDOW_MS = 10 * 60e3; // show QR codes for 10 minutes after the app asks
-const CONFIG_EVERY_MS = 45e3;
-const FLUSH_EVERY_MS = 15e3;
-const HEARTBEAT_MS = 5 * 60e3;
-const HISTORY_KEEP_MS = 60 * 60e3; // recent history from the first link, kept in memory for an hour
-const HISTORY_MAX = 5000;
-
-function loadConfig() {
-  let file = {};
-  try {
-    file = JSON.parse(readFileSync(process.env.GD_CONFIG || '/etc/group-digest/sync.json', 'utf8'));
-  } catch {
-    /* env only */
-  }
-  const relay = (process.env.GD_RELAY || file.relay || '').replace(/\/+$/, '');
-  const room = process.env.GD_ROOM || file.room;
-  const secret = process.env.GD_SECRET || file.secret;
-  if (!relay || !/^[a-f0-9]{32}$/.test(room || '') || !secret) {
-    console.error('Missing or bad config: need relay, room (32 hex) and secret.');
-    process.exit(2);
-  }
-  return { relay, room, secret };
-}
-
-const cfg = loadConfig();
-const keys = await deriveKeys(cfg.room, cfg.secret);
+const VERSION = '0.2.0';
+const SELF = fileURLToPath(import.meta.url);
 const log = (...a) => console.log(new Date().toISOString(), ...a);
-const quiet = pino({ level: process.env.GD_DEBUG ? 'debug' : 'silent' });
 
-// ---- relay ------------------------------------------------------------------
-
-async function relay(method, op, body) {
-  const res = await fetch(`${cfg.relay}/api/sync/${cfg.room}/${op}`, {
-    method,
-    headers: { authorization: `Bearer ${keys.token}`, 'content-type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined,
-    signal: AbortSignal.timeout(20e3),
-  });
-  if (!res.ok) throw new Error(`relay ${op} ${res.status}`);
-  return res.json();
+// Give Node a heap that matches the machine, so more people fit on bigger VMs.
+const memMb = Math.round(totalmem() / 2 ** 20);
+const wantHeapMb = Math.max(384, Math.round(memMb * 0.7));
+if (!process.env.GD_CHILD && getHeapStatistics().heap_size_limit / 2 ** 20 < wantHeapMb * 0.9) {
+  const child = spawn(process.execPath, [`--max-old-space-size=${wantHeapMb}`, SELF], { stdio: 'inherit', env: { ...process.env, GD_CHILD: '1' } });
+  for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => child.kill(sig));
+  child.on('exit', (code) => process.exit(code ?? 0));
+} else {
+  await main();
 }
 
-// ---- state shown in the app ---------------------------------------------------
+async function main() {
+  const DATA = process.env.GD_DATA || '/var/lib/group-digest';
+  const LINK_WINDOW_MS = 10 * 60e3; // show QR codes for 10 minutes after the app asks
+  const HISTORY_KEEP_MS = 60 * 60e3; // recent history from linking, kept in memory for an hour
+  const HISTORY_MAX = 3000;
+  const MAX_USERS = Number(process.env.GD_MAX_USERS) || Math.max(1, Math.min(300, Math.floor((memMb - 350) / 110)));
+  const quiet = pino({ level: process.env.GD_DEBUG ? 'debug' : 'silent' });
 
-const state = { v: 1, version: VERSION, status: 'starting', qr: null, me: null, groups: [], error: null, lastMessageAt: 0, at: 0 };
-let stateTimer = null;
-let lastPushedState = '';
-
-function setState(patch) {
-  Object.assign(state, patch);
-  clearTimeout(stateTimer);
-  stateTimer = setTimeout(pushState, patch.qr ? 0 : 1500);
-}
-
-async function pushState(force = false) {
-  state.at = Date.now();
-  const { at: _at, ...rest } = state;
-  const sig = JSON.stringify(rest);
-  if (!force && sig === lastPushedState) return;
-  try {
-    await relay('PUT', 'state', { blob: await seal(keys, 'state', state) });
-    lastPushedState = sig;
-  } catch (e) {
-    log('state push failed:', e.message);
-    clearTimeout(stateTimer);
-    stateTimer = setTimeout(pushState, 30e3);
-  }
-}
-
-// ---- config from the app --------------------------------------------------------
-
-let selected = new Set();
-let linkRequestedAt = 0;
-let unlinkSeen = null;
-
-async function pollConfig() {
-  try {
-    const r = await relay('GET', 'config');
-    if (!r.blob) return;
-    const c = await open(keys, 'config', r.blob);
-    const before = selected;
-    selected = new Set(Array.isArray(c.groups) ? c.groups : []);
-    const added = [...selected].filter((g) => !before.has(g));
-    if (added.length) queueHistory(added);
-    const wantLink = Number(c.linkRequestedAt) || 0;
-    if (wantLink > linkRequestedAt) {
-      linkRequestedAt = wantLink;
-      if (!sock && Date.now() - linkRequestedAt < LINK_WINDOW_MS) connect();
+  const cfg = (() => {
+    let file = {};
+    try {
+      file = JSON.parse(readFileSync(process.env.GD_CONFIG || '/etc/group-digest/sync.json', 'utf8'));
+    } catch {
+      /* env only */
     }
-    if (unlinkSeen === null) {
+    const relay = (process.env.GD_RELAY || file.relay || '').replace(/\/+$/, '');
+    const room = process.env.GD_ROOM || file.room;
+    const secret = process.env.GD_SECRET || file.secret;
+    if (!relay || !/^[a-f0-9]{32}$/.test(room || '') || !secret) {
+      console.error('Missing or bad config: need relay, room (32 hex) and secret.');
+      process.exit(2);
+    }
+    return { relay, room, secret };
+  })();
+
+  async function relay(keys, method, op, body, query = '') {
+    const res = await fetch(`${cfg.relay}/api/sync/${keys.room}/${op}${query}`, {
+      method,
+      headers: { authorization: `Bearer ${keys.token}`, 'content-type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(20e3),
+    });
+    if (!res.ok) throw new Error(`relay ${op} ${res.status}`);
+    return res.json();
+  }
+
+  let waVersion;
+  async function whatsappVersion() {
+    if (!waVersion) {
       try {
-        unlinkSeen = Number(readFileSync(join(DATA, 'unlink-seen'), 'utf8')) || 0;
+        waVersion = (await fetchLatestBaileysVersion()).version;
+        setTimeout(() => (waVersion = undefined), 6 * 3600e3);
       } catch {
-        unlinkSeen = Number(c.unlink) || 0; // first run: nothing to undo
+        /* use the bundled one */
       }
     }
-    if ((Number(c.unlink) || 0) > unlinkSeen) {
-      unlinkSeen = Number(c.unlink);
-      log('unlink requested from the app');
-      await unlink();
+    return waVersion;
+  }
+
+  // ---- one person: their WhatsApp link, their relay room, their key ----------------
+
+  class Session {
+    constructor({ room, secret, dir, owner = false, name = null, code = null, joinedAt = Date.now() }) {
+      Object.assign(this, { room, secret, dir, owner, name, code, joinedAt });
+      this.authDir = join(dir, 'auth');
+      this.state = { v: 2, version: VERSION, status: 'starting', qr: null, me: null, groups: [], error: null, lastMessageAt: 0, at: 0 };
+      this.config = { groups: [] };
+      this.selected = new Set();
+      this.linkRequestedAt = 0;
+      this.unlinkSeen = null;
+      this.queue = [];
+      this.seen = new Set();
+      this.history = [];
+      this.groupNames = new Map();
+      this.sock = null;
+      this.retry = 0;
+      this.stopped = false;
+      this.lastPushed = '';
+      this.timer = null;
     }
-    writeFileSync(join(DATA, 'unlink-seen'), String(unlinkSeen));
-  } catch (e) {
-    log('config poll failed:', e.message);
-  }
-}
 
-// ---- outgoing messages ------------------------------------------------------------
-
-let queue = [];
-const seenIds = new Set();
-const history = []; // {group, msg} from the first-link history sync, in memory only
-
-function remember(id) {
-  seenIds.add(id);
-  if (seenIds.size > 20000) seenIds.delete(seenIds.values().next().value);
-}
-
-async function flush() {
-  if (!queue.length) return;
-  const batch = queue.slice(0, 500);
-  try {
-    await relay('POST', 'messages', { blob: await seal(keys, 'messages', { v: 1, messages: batch }) });
-    queue = queue.slice(batch.length);
-    setState({ lastMessageAt: Date.now() });
-    if (queue.length) setTimeout(flush, 1000);
-  } catch (e) {
-    log('flush failed, will retry:', e.message);
-    if (queue.length > 20000) queue = queue.slice(-20000);
-  }
-}
-
-function queueHistory(groupIds) {
-  const want = new Set(groupIds);
-  const cutoff = Date.now() - HISTORY_KEEP_MS;
-  let n = 0;
-  for (const h of history) {
-    if (h.keptAt >= cutoff && want.has(h.group) && !seenIds.has(h.msg.id)) {
-      queue.push(h.msg);
-      remember(h.msg.id);
-      n++;
+    label() {
+      return this.owner ? 'owner' : `friend ${this.room.slice(0, 6)}`;
     }
-  }
-  if (n) log(`queued ${n} recent messages for newly chosen groups`);
-}
 
-// ---- WhatsApp -----------------------------------------------------------------------
-
-let sock = null;
-let retry = 0;
-
-async function refreshGroups() {
-  if (!sock) return;
-  try {
-    const all = await sock.groupFetchAllParticipating();
-    const groups = Object.values(all)
-      .map((g) => ({ id: g.id, name: g.subject || g.id, size: g.participants?.length || 0 }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-    for (const g of groups) groupNames.set(g.id, g.name);
-    setState({ groups });
-  } catch (e) {
-    log('group list failed:', e.message);
-  }
-}
-
-async function unlink() {
-  try {
-    await sock?.logout();
-  } catch {
-    /* already gone */
-  }
-  sock?.end?.(undefined);
-  sock = null;
-  rmSync(AUTH_DIR, { recursive: true, force: true });
-  history.length = 0;
-  setState({ status: 'unlinked', qr: null, me: null, groups: [], error: null });
-}
-
-async function connect() {
-  mkdirSync(AUTH_DIR, { recursive: true });
-  // oxlint-disable-next-line react-hooks/rules-of-hooks -- Baileys helper, not a React hook
-  const { state: auth, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
-  const linked = !!auth.creds.registered;
-  if (!linked && Date.now() - linkRequestedAt > LINK_WINDOW_MS) {
-    // Not linked and nobody is looking at the app's link screen: stay idle.
-    setState({ status: 'unlinked', qr: null });
-    return;
-  }
-  let version;
-  try {
-    ({ version } = await fetchLatestBaileysVersion());
-  } catch {
-    /* use the bundled one */
-  }
-  // Optional outbound proxy (GD_PROXY=http://host:port), needs `npm i https-proxy-agent`.
-  let agent;
-  if (process.env.GD_PROXY) agent = new (await import('https-proxy-agent')).HttpsProxyAgent(process.env.GD_PROXY);
-  const s = makeWASocket({
-    auth,
-    agent,
-    fetchAgent: agent,
-    version,
-    logger: quiet,
-    browser: Browsers.ubuntu('Chrome'),
-    markOnlineOnConnect: false, // keep phone notifications working
-    syncFullHistory: false,
-    generateHighQualityLinkPreview: false,
-    shouldSyncHistoryMessage: () => true,
-    getMessage: async () => undefined,
-  });
-  sock = s;
-  // Watchdog: if WhatsApp neither connects nor sends a QR code in 90 s, start over.
-  let progressed = false;
-  setTimeout(() => {
-    if (sock !== s || progressed) return;
-    log('no answer from WhatsApp in 90s, retrying');
-    setState({ status: state.status === 'connected' ? 'starting' : state.status, error: 'Cannot reach WhatsApp from the server yet, retrying' });
-    sock = null;
-    s.end(undefined);
-    setTimeout(connect, Math.min(5 * 60e3, 5000 * 2 ** retry++));
-  }, 90e3);
-  s.ev.on('creds.update', saveCreds);
-
-  s.ev.on('connection.update', async (u) => {
-    if (sock !== s) return;
-    if (u.qr || u.connection === 'open') progressed = true;
-    if (u.qr) {
-      if (Date.now() - linkRequestedAt > LINK_WINDOW_MS) {
-        log('link window closed, stopping QR codes');
-        sock = null;
-        s.end(undefined);
-        setState({ status: 'unlinked', qr: null });
-        return;
+    async init() {
+      this.keys = await deriveKeys(this.room, this.secret);
+      mkdirSync(this.dir, { recursive: true, mode: 0o700 });
+      try {
+        this.unlinkSeen = Number(readFileSync(join(this.dir, 'unlink-seen'), 'utf8')) || 0;
+      } catch {
+        /* first run */
       }
-      setState({ status: 'qr', qr: u.qr, error: null });
     }
-    if (u.connection === 'open') {
-      retry = 0;
-      const me = s.user ? { name: s.user.name || s.user.verifiedName || null, number: (s.user.id || '').split(':')[0].split('@')[0] } : null;
-      log('connected');
-      setState({ status: 'connected', qr: null, me, error: null });
-      refreshGroups();
+
+    setState(patch) {
+      Object.assign(this.state, patch);
+      clearTimeout(this.timer);
+      this.timer = setTimeout(() => this.pushState(), patch.qr ? 0 : 1500);
     }
-    if (u.connection === 'close') {
-      const code = u.lastDisconnect?.error?.output?.statusCode;
-      sock = null;
-      if (code === DisconnectReason.loggedOut) {
-        log('logged out from the phone; waiting for a new link');
-        rmSync(AUTH_DIR, { recursive: true, force: true });
-        setState({ status: 'unlinked', qr: null, me: null, groups: [], error: 'Logged out from the phone' });
-        return;
+
+    async pushState(force = false) {
+      if (this.stopped && this.state.status !== 'removed') return;
+      this.state.at = Date.now();
+      if (this.owner) this.state.host = host.summary();
+      const { at: _at, ...rest } = this.state;
+      const sig = JSON.stringify(rest);
+      if (!force && sig === this.lastPushed) return;
+      try {
+        await relay(this.keys, 'PUT', 'state', { blob: await seal(this.keys, 'state', this.state) });
+        this.lastPushed = sig;
+      } catch (e) {
+        log(this.label(), 'state push failed:', e.message);
+        clearTimeout(this.timer);
+        this.timer = setTimeout(() => this.pushState(), 30e3);
       }
-      if (code === DisconnectReason.connectionReplaced) {
-        setState({ status: 'error', error: 'Another copy of the sync server took over this link' });
-      }
-      const wait = code === DisconnectReason.restartRequired ? 0 : Math.min(5 * 60e3, 2000 * 2 ** retry++);
-      log(`connection closed (${code ?? 'no code'}), reconnecting in ${Math.round(wait / 1000)}s`);
-      setTimeout(connect, wait);
     }
-  });
 
-  s.ev.on('groups.upsert', refreshGroups);
-  s.ev.on('groups.update', (ups) => {
-    if (ups.some((g) => g.subject)) refreshGroups();
-  });
-
-  s.ev.on('messages.upsert', ({ messages, type }) => {
-    if (type !== 'notify' && type !== 'append') return;
-    for (const msg of messages) {
-      const group = msg.key?.remoteJid;
-      if (!group || !selected.has(group) || seenIds.has(msg.key.id)) continue;
-      const rec = toRecord(msg);
-      if (!rec) continue;
-      remember(rec.id);
-      queue.push(rec);
-    }
-  });
-
-  // Recent history sent right after linking. Kept in memory for an hour so the
-  // groups chosen in the app just after linking start with recent messages.
-  s.ev.on('messaging-history.set', ({ messages }) => {
-    const keptAt = Date.now();
-    const recent = keptAt - 14 * 864e5;
-    for (const msg of messages || []) {
-      const rec = toRecord(msg);
-      if (!rec || rec.ts < recent) continue;
-      if (selected.has(rec.group)) {
-        if (!seenIds.has(rec.id)) {
-          remember(rec.id);
-          queue.push(rec);
+    async pollConfig() {
+      if (this.stopped) return;
+      try {
+        const r = await relay(this.keys, 'GET', 'config');
+        if (!r.blob) return;
+        const c = await open(this.keys, 'config', r.blob);
+        this.config = c;
+        const before = this.selected;
+        this.selected = new Set(Array.isArray(c.groups) ? c.groups : []);
+        this.queueHistory([...this.selected].filter((g) => !before.has(g)));
+        const wantLink = Number(c.linkRequestedAt) || 0;
+        if (wantLink > this.linkRequestedAt) {
+          this.linkRequestedAt = wantLink;
+          if (!this.sock && Date.now() - this.linkRequestedAt < LINK_WINDOW_MS) this.connect();
         }
-      } else {
-        history.push({ group: rec.group, msg: rec, keptAt });
+        const unlink = Number(c.unlink) || 0;
+        if (this.unlinkSeen === null) this.unlinkSeen = unlink; // first run: nothing to undo
+        if (unlink > this.unlinkSeen) {
+          this.unlinkSeen = unlink;
+          log(this.label(), 'unlink requested from the app');
+          await this.logout();
+        }
+        writeFileSync(join(this.dir, 'unlink-seen'), String(this.unlinkSeen));
+        if (!this.owner && c.leave) await host.remove(this.room, 'left');
+        if (this.owner) await host.ownerConfig(c);
+      } catch (e) {
+        log(this.label(), 'config poll failed:', e.message);
       }
     }
-    if (history.length > HISTORY_MAX) history.splice(0, history.length - HISTORY_MAX);
-  });
-}
 
-// ---- main -------------------------------------------------------------------------------
+    remember(id) {
+      this.seen.add(id);
+      if (this.seen.size > 5000) this.seen.delete(this.seen.values().next().value);
+    }
 
-log(`Group Digest sync ${VERSION} starting, relay ${cfg.relay}`);
-setState({ status: 'starting' });
-await pollConfig();
-await connect();
-setInterval(pollConfig, CONFIG_EVERY_MS);
-setInterval(flush, FLUSH_EVERY_MS);
-setInterval(() => pushState(true), HEARTBEAT_MS);
-setInterval(refreshGroups, 6 * 3600e3);
-setInterval(() => {
-  const cutoff = Date.now() - HISTORY_KEEP_MS;
-  while (history.length && history[0].keptAt < cutoff) history.shift();
-}, 5 * 60e3);
+    queueHistory(groupIds) {
+      if (!groupIds.length) return;
+      const want = new Set(groupIds);
+      const cutoff = Date.now() - HISTORY_KEEP_MS;
+      for (const h of this.history) {
+        if (h.keptAt >= cutoff && want.has(h.msg.group) && !this.seen.has(h.msg.id)) {
+          this.queue.push(h.msg);
+          this.remember(h.msg.id);
+        }
+      }
+    }
 
-for (const sig of ['SIGINT', 'SIGTERM']) {
-  process.on(sig, async () => {
-    log('stopping');
-    await flush();
-    sock?.end?.(undefined);
-    process.exit(0);
-  });
+    async flush() {
+      if (!this.queue.length || this.stopped) return;
+      const batch = this.queue.slice(0, 500);
+      try {
+        await relay(this.keys, 'POST', 'messages', { blob: await seal(this.keys, 'messages', { v: 1, messages: batch }) });
+        this.queue = this.queue.slice(batch.length);
+        this.setState({ lastMessageAt: Date.now() });
+      } catch (e) {
+        log(this.label(), 'flush failed, will retry:', e.message);
+        if (this.queue.length > 5000) this.queue = this.queue.slice(-5000);
+      }
+    }
+
+    record(msg) {
+      return toRecord(msg, this.groupNames, this.state.me?.name);
+    }
+
+    async refreshGroups() {
+      if (!this.sock) return;
+      try {
+        const all = await this.sock.groupFetchAllParticipating();
+        const groups = Object.values(all)
+          .map((g) => ({ id: g.id, name: g.subject || g.id, size: g.participants?.length || 0 }))
+          .sort((a, b) => a.name.localeCompare(b.name));
+        for (const g of groups) this.groupNames.set(g.id, g.name);
+        this.setState({ groups });
+      } catch (e) {
+        log(this.label(), 'group list failed:', e.message);
+      }
+    }
+
+    async logout() {
+      const s = this.sock;
+      this.sock = null;
+      try {
+        await s?.logout();
+      } catch {
+        /* already gone */
+      }
+      s?.end?.(undefined);
+      rmSync(this.authDir, { recursive: true, force: true });
+      this.history.length = 0;
+      this.queue.length = 0;
+      this.setState({ status: 'unlinked', qr: null, me: null, groups: [], error: null });
+    }
+
+    async stop() {
+      this.stopped = true;
+      clearTimeout(this.timer);
+      const s = this.sock;
+      this.sock = null;
+      s?.end?.(undefined);
+    }
+
+    async connect() {
+      if (this.stopped) return;
+      mkdirSync(this.authDir, { recursive: true, mode: 0o700 });
+      const { state: auth, saveCreds } = await loadAuthState(this.authDir);
+      if (!auth.creds.registered && Date.now() - this.linkRequestedAt > LINK_WINDOW_MS) {
+        // Not linked and nobody is looking at the link screen: stay idle.
+        this.setState({ status: 'unlinked', qr: null });
+        return;
+      }
+      let agent;
+      if (process.env.GD_PROXY) agent = new (await import('https-proxy-agent')).HttpsProxyAgent(process.env.GD_PROXY);
+      const s = makeWASocket({
+        auth,
+        version: await whatsappVersion(),
+        agent,
+        fetchAgent: agent,
+        logger: quiet,
+        browser: Browsers.ubuntu('Chrome'),
+        markOnlineOnConnect: false, // keep phone notifications working
+        syncFullHistory: false,
+        generateHighQualityLinkPreview: false,
+        shouldSyncHistoryMessage: () => true,
+        getMessage: async () => undefined,
+      });
+      this.sock = s;
+      s.ev.on('creds.update', saveCreds);
+
+      // Watchdog: if WhatsApp neither connects nor sends a QR code in 90 s, start over.
+      let progressed = false;
+      setTimeout(() => {
+        if (this.sock !== s || progressed) return;
+        log(this.label(), 'no answer from WhatsApp in 90s, retrying');
+        this.setState({ status: this.state.status === 'connected' ? 'starting' : this.state.status, error: 'Cannot reach WhatsApp from the server yet, retrying' });
+        this.sock = null;
+        s.end(undefined);
+        setTimeout(() => this.connect(), Math.min(5 * 60e3, 5000 * 2 ** this.retry++));
+      }, 90e3);
+
+      s.ev.on('connection.update', (u) => {
+        if (this.sock !== s) return;
+        if (u.qr || u.connection === 'open') progressed = true;
+        if (u.qr) {
+          if (Date.now() - this.linkRequestedAt > LINK_WINDOW_MS) {
+            log(this.label(), 'link window closed, stopping QR codes');
+            this.sock = null;
+            s.end(undefined);
+            this.setState({ status: 'unlinked', qr: null });
+            return;
+          }
+          this.setState({ status: 'qr', qr: u.qr, error: null });
+        }
+        if (u.connection === 'open') {
+          this.retry = 0;
+          const me = s.user ? { name: s.user.name || s.user.verifiedName || null, number: (s.user.id || '').split(':')[0].split('@')[0] } : null;
+          log(this.label(), 'connected');
+          this.setState({ status: 'connected', qr: null, me, error: null });
+          this.refreshGroups();
+        }
+        if (u.connection === 'close') {
+          const code = u.lastDisconnect?.error?.output?.statusCode;
+          this.sock = null;
+          if (this.stopped) return;
+          if (code === DisconnectReason.loggedOut) {
+            log(this.label(), 'logged out from the phone; waiting for a new link');
+            rmSync(this.authDir, { recursive: true, force: true });
+            this.setState({ status: 'unlinked', qr: null, me: null, groups: [], error: 'Logged out from the phone' });
+            return;
+          }
+          if (code === DisconnectReason.connectionReplaced) {
+            this.setState({ status: 'error', error: 'Another copy of the sync server took over this link' });
+          }
+          const wait = code === DisconnectReason.restartRequired ? 0 : Math.min(5 * 60e3, 2000 * 2 ** this.retry++);
+          log(this.label(), `connection closed (${code ?? 'no code'}), reconnecting in ${Math.round(wait / 1000)}s`);
+          setTimeout(() => this.connect(), wait);
+        }
+      });
+
+      s.ev.on('groups.upsert', () => this.refreshGroups());
+      s.ev.on('groups.update', (ups) => {
+        if (ups.some((g) => g.subject)) this.refreshGroups();
+      });
+
+      s.ev.on('messages.upsert', ({ messages, type }) => {
+        if (type !== 'notify' && type !== 'append') return;
+        for (const msg of messages) {
+          const group = msg.key?.remoteJid;
+          if (!group || !this.selected.has(group) || this.seen.has(msg.key.id)) continue;
+          const rec = this.record(msg);
+          if (!rec) continue;
+          this.remember(rec.id);
+          this.queue.push(rec);
+        }
+      });
+
+      // Recent history sent right after linking, kept in memory for an hour so
+      // groups chosen just after linking start with recent messages.
+      s.ev.on('messaging-history.set', ({ messages }) => {
+        const keptAt = Date.now();
+        const recent = keptAt - 14 * 864e5;
+        for (const msg of messages || []) {
+          const rec = this.record(msg);
+          if (!rec || rec.ts < recent) continue;
+          if (this.selected.has(rec.group)) {
+            if (!this.seen.has(rec.id)) {
+              this.remember(rec.id);
+              this.queue.push(rec);
+            }
+          } else this.history.push({ msg: rec, keptAt });
+        }
+        if (this.history.length > HISTORY_MAX) this.history.splice(0, this.history.length - HISTORY_MAX);
+      });
+    }
+
+    pruneHistory() {
+      const cutoff = Date.now() - HISTORY_KEEP_MS;
+      while (this.history.length && this.history[0].keptAt < cutoff) this.history.shift();
+    }
+  }
+
+  // ---- the host: owner + invited friends -------------------------------------------------
+
+  const sessions = new Map(); // room -> Session
+  const USERS = join(DATA, 'users');
+
+  const host = {
+    key: null,
+    inbox: null,
+    inviteKeys: null,
+    invites: [],
+
+    async init() {
+      const keyFile = join(DATA, 'host-key.json');
+      let k;
+      try {
+        k = JSON.parse(readFileSync(keyFile, 'utf8'));
+      } catch {
+        k = await newHostKey();
+        writeFileSync(keyFile, JSON.stringify(k), { mode: 0o600 });
+      }
+      this.pub = k.pub;
+      this.key = await importHostKey(k.priv);
+      const ib = await hostInbox(cfg.secret);
+      this.inbox = ib.room;
+      this.inboxKeys = await deriveKeys(ib.room, ib.secret);
+    },
+
+    friends() {
+      return [...sessions.values()].filter((s) => !s.owner);
+    },
+
+    summary() {
+      return {
+        inbox: this.inbox,
+        pub: this.pub,
+        max: MAX_USERS,
+        members: this.friends().map((s) => ({
+          room: s.room,
+          name: s.name,
+          code: s.code,
+          joinedAt: s.joinedAt,
+          status: s.state.status,
+          lastMessageAt: s.state.lastMessageAt,
+        })),
+      };
+    },
+
+    async ownerConfig(c) {
+      this.invites = Array.isArray(c.invites) ? c.invites : [];
+      for (const room of Array.isArray(c.remove) ? c.remove : []) if (sessions.has(room)) await this.remove(room, 'removed');
+    },
+
+    async pollInbox() {
+      let notes;
+      try {
+        notes = (await relay(this.inboxKeys, 'GET', 'inbox', undefined, '?after=0')).notes;
+      } catch (e) {
+        log('inbox poll failed:', e.message);
+        return;
+      }
+      if (!notes.length) return;
+      let ownerFresh = false;
+      for (const n of notes) {
+        let note;
+        try {
+          note = await openSealed(this.key, n.blob);
+        } catch {
+          continue; // not for us or tampered
+        }
+        if (note.type === 'ping') {
+          await sessions.get(note.room)?.pollConfig();
+        } else if (note.type === 'join') {
+          if (!ownerFresh) {
+            await sessions.get(cfg.room)?.pollConfig(); // pick up invites made a moment ago
+            ownerFresh = true;
+          }
+          await this.join(note);
+        }
+      }
+      try {
+        await relay(this.inboxKeys, 'POST', 'inbox-ack', { upTo: Math.max(...notes.map((n) => n.seq)) });
+      } catch {
+        /* acked next time */
+      }
+    },
+
+    async refuse(note, why) {
+      try {
+        const keys = await deriveKeys(note.room, note.secret);
+        const state = { v: 2, version: VERSION, status: 'error', qr: null, me: null, groups: [], error: why, lastMessageAt: 0, at: Date.now() };
+        await relay(keys, 'PUT', 'state', { blob: await seal(keys, 'state', state) });
+      } catch {
+        /* nothing more to do */
+      }
+    },
+
+    async join(note) {
+      if (typeof note.room !== 'string' || !/^[a-f0-9]{32}$/.test(note.room) || typeof note.secret !== 'string' || note.room === cfg.room) return;
+      if (sessions.has(note.room)) return sessions.get(note.room).pollConfig(); // already in
+      const invite = this.invites.find((i) => i.code === note.code);
+      if (!invite) return this.refuse(note, 'This invite is not valid any more. Ask for a new one.');
+      if (this.friends().some((s) => s.code === note.code)) return this.refuse(note, 'This invite was already used. Ask for a new one.');
+      if (this.friends().length >= MAX_USERS) return this.refuse(note, 'This sync server is full right now.');
+      const name = String(note.name || invite.name || '').slice(0, 60) || null;
+      const s = new Session({ room: note.room, secret: note.secret, dir: join(USERS, note.room), name, code: note.code });
+      await s.init();
+      writeFileSync(join(s.dir, 'user.json'), JSON.stringify({ room: s.room, secret: s.secret, name, code: s.code, joinedAt: s.joinedAt }), { mode: 0o600 });
+      sessions.set(s.room, s);
+      s.setState({ status: 'starting' });
+      log(`friend ${s.room.slice(0, 6)} joined (${sessions.size - 1} of ${MAX_USERS})`);
+      await s.pollConfig();
+      await s.connect();
+      sessions.get(cfg.room)?.pushState();
+    },
+
+    async remove(room, why) {
+      const s = sessions.get(room);
+      if (!s || s.owner) return;
+      log(`friend ${room.slice(0, 6)} ${why}`);
+      await s.logout();
+      await s.stop();
+      sessions.delete(room);
+      rmSync(s.dir, { recursive: true, force: true });
+      s.state = { ...s.state, status: 'removed', qr: null, me: null, groups: [], error: why === 'left' ? null : 'You were removed from this sync server.' };
+      await s.pushState(true);
+      sessions.get(cfg.room)?.pushState();
+    },
+  };
+
+  // ---- self-update: restart when the Worker serves a newer server ---------------------
+
+  const sha = (buf) => createHash('sha256').update(buf).digest('hex');
+  async function checkForUpdate() {
+    try {
+      const files = ['bridge.mjs', 'parse.mjs', 'crypto.mjs', 'package.json'];
+      for (const f of files) {
+        const res = await fetch(`${cfg.relay}/bridge/${f}`, { signal: AbortSignal.timeout(20e3) });
+        if (!res.ok) return;
+        const local = join(SELF, '..', f);
+        if (!existsSync(local) || sha(Buffer.from(await res.arrayBuffer())) !== sha(readFileSync(local))) {
+          log(`update available (${f} changed), restarting to install it`);
+          await shutdown(0);
+        }
+      }
+    } catch {
+      /* try again later */
+    }
+  }
+
+  async function shutdown(code) {
+    for (const s of sessions.values()) await s.flush();
+    for (const s of sessions.values()) await s.stop();
+    process.exit(code);
+  }
+
+  // ---- start --------------------------------------------------------------------------------
+
+  log(`Group Digest sync ${VERSION} starting, relay ${cfg.relay}, room for ${MAX_USERS} friends`);
+  mkdirSync(USERS, { recursive: true, mode: 0o700 });
+  await host.init();
+
+  // The owner keeps the original data layout, so existing links carry over.
+  const owner = new Session({ room: cfg.room, secret: cfg.secret, dir: DATA, owner: true });
+  await owner.init();
+  sessions.set(owner.room, owner);
+  for (const room of readdirSync(USERS)) {
+    try {
+      const u = JSON.parse(readFileSync(join(USERS, room, 'user.json'), 'utf8'));
+      const s = new Session({ ...u, dir: join(USERS, room) });
+      await s.init();
+      sessions.set(s.room, s);
+    } catch {
+      /* incomplete join */
+    }
+  }
+
+  for (const s of sessions.values()) s.setState({ status: 'starting' });
+  // Claim the inbox so friends can drop join requests into it.
+  await host.pollInbox();
+  for (const s of sessions.values()) {
+    await s.pollConfig();
+    s.connect();
+    await new Promise((r) => setTimeout(r, 1500)); // stagger reconnects
+  }
+
+  setInterval(() => host.pollInbox(), 30e3);
+  // The apps nudge the server through the inbox when they change settings; this is the fallback.
+  setInterval(() => {
+    for (const s of sessions.values()) if (s.owner && s.state.status !== 'connected') s.pollConfig();
+  }, 45e3);
+  let i = 0;
+  setInterval(() => {
+    const all = [...sessions.values()];
+    if (!all.length) return;
+    const s = all[i++ % all.length];
+    s.pollConfig();
+  }, Math.max(10e3, (30 * 60e3) / Math.max(1, sessions.size)));
+  setInterval(() => {
+    for (const s of sessions.values()) s.flush();
+  }, 15e3);
+  setInterval(() => {
+    for (const s of sessions.values()) {
+      s.pruneHistory();
+      s.pushState(true);
+    }
+  }, 15 * 60e3);
+  setInterval(() => {
+    for (const s of sessions.values()) s.refreshGroups();
+  }, 6 * 3600e3);
+  setTimeout(checkForUpdate, 5 * 60e3);
+  setInterval(checkForUpdate, 6 * 3600e3);
+
+  for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => shutdown(0));
 }

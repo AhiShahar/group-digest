@@ -24,3 +24,17 @@ describe('live sync crypto', () => {
     await expect(open(other, 'state', blob)).rejects.toThrow();
   });
 });
+
+describe('host inbox', () => {
+  it('app seals a note only the server can open, and both derive the same inbox', async () => {
+    const { secret } = newPairing();
+    const { hostInbox, sealTo } = await import('./syncCrypto');
+    expect(await hostInbox(secret)).toEqual(await server.hostInbox(secret));
+    const host = await server.newHostKey();
+    const priv = await server.importHostKey(host.priv);
+    const blob = await sealTo(host.pub, { type: 'join', code: 'abc', room: 'r', secret: 's' });
+    expect(await server.openSealed(priv, blob)).toEqual({ type: 'join', code: 'abc', room: 'r', secret: 's' });
+    const other = await server.importHostKey((await server.newHostKey()).priv);
+    await expect(server.openSealed(other, blob)).rejects.toThrow();
+  });
+});
