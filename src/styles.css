@@ -198,3 +198,17 @@ input, select { border-radius: 14px; }
   .onboard { box-shadow: 0 0 0 1px rgba(255, 155, 133, 0.3), 0 20px 50px -20px rgba(255, 155, 133, 0.35); }
   .avatar { color: #1a0f2a; }
 }
+
+/* Header spans the full screen width, whatever the content width. */
+.top { box-shadow: 0 0 0 100vmax var(--top); clip-path: inset(0 -100vmax -1px); border-bottom: 1px solid var(--line); }
+
+/* Compact, friendly error */
+.error-box {
+  display: flex; flex-direction: column; gap: 2px; margin-top: 12px; padding: 10px 14px;
+  border-radius: 14px; background: color-mix(in srgb, var(--danger) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent); font-size: 14.5px;
+}
+.error-box strong { color: var(--danger); }
+.error-box details { margin-top: 4px; font-size: 13px; color: var(--muted); }
+.error-box summary { cursor: pointer; }
+.error-box details p { margin: 4px 0 0; overflow-wrap: anywhere; }

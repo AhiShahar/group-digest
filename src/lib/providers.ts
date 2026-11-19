@@ -15,6 +15,7 @@ import {
 } from './digest';
 
 import type { ProviderSettings } from './providerInfo';
+import { isModelGone, rankModels } from './models';
 export type { ProviderSettings };
 
 // Claude models that accept server-side fallbacks on refusal.
@@ -197,19 +198,58 @@ async function digestOnce(s: ProviderSettings, user: string): Promise<Digest> {
   return DigestSchema.parse(retry);
 }
 
+const listCache = new Map<string, string[]>();
+
+/** Models to try, best first: the user's chosen model (if any), then the provider's newest suitable ones. */
+export async function modelCandidates(s: ProviderSettings): Promise<string[]> {
+  const key = `${s.provider}|${s.baseUrl}|${s.apiKey.slice(-8)}`;
+  let ids = listCache.get(key);
+  if (!ids) {
+    try {
+      ids = await listModels(s);
+      listCache.set(key, ids);
+    } catch (e) {
+      if (!s.model) throw e;
+      ids = [];
+    }
+  }
+  const ranked = rankModels(s.provider, ids);
+  const order = s.model ? [s.model, ...ranked.filter((m) => m !== s.model)] : ranked;
+  if (!order.length) throw new Error('No models found for this AI. Type a model name in AI and settings.');
+  return order;
+}
+
 export async function summarize(
   s: ProviderSettings,
   req: DigestRequest,
   onProgress?: (note: string) => void,
+  onModel?: (model: string) => void,
 ): Promise<Digest> {
   const msgs = req.messages.filter((m) => m.text.trim() || m.media);
   if (!msgs.length) throw new Error('No messages in this time range.');
+  const order = await modelCandidates(s);
+  let pick = 0;
+  let cur: ProviderSettings = { ...s, model: order[0] };
+  onModel?.(cur.model);
   const chunks = chunkMessages(msgs);
   const parts: Digest[] = [];
   for (let i = 0; i < chunks.length; i++) {
     onProgress?.(chunks.length > 1 ? `Summarizing part ${i + 1} of ${chunks.length}…` : 'Summarizing…');
     const note = chunks.length > 1 ? `This is part ${i + 1} of ${chunks.length} of the chat, in order.` : '';
-    parts.push(await digestOnce(s, buildUserPrompt(req, formatTranscript(chunks[i]), note)));
+    const prompt = buildUserPrompt(req, formatTranscript(chunks[i]), note);
+    for (;;) {
+      try {
+        parts.push(await digestOnce(cur, prompt));
+        break;
+      } catch (e) {
+        // The model was retired or renamed: move on to the next one on the provider's list.
+        if (!isModelGone(e) || pick + 1 >= Math.min(order.length, 4)) throw e;
+        pick++;
+        cur = { ...s, model: order[pick] };
+        onModel?.(cur.model);
+        onProgress?.(`Switching to ${cur.model}…`);
+      }
+    }
   }
   const merged = mergeDigests(parts);
   merged.events = sanitizeEvents(merged.events, msgs[0].ts, msgs[msgs.length - 1].ts);

@@ -7,6 +7,7 @@ import { addEventNative, bridge, canCapture, captureStatus, isAndroidApp, peekCa
 import { finishOpenRouterSignIn, startOpenRouterSignIn } from './lib/openrouter';
 import { parseChatText, readExportFile } from './lib/parser';
 import { PROVIDERS, providerInfo, type ProviderId } from './lib/providerInfo';
+import { rankModels } from './lib/models';
 
 const providers = () => import('./lib/providers');
 import {
@@ -469,6 +470,7 @@ function ChatView(props: {
     setBusy('Summarizing…');
     try {
       const { summarize } = await providers();
+      let usedModel = settings.model;
       const digest = await summarize(
         settings,
         {
@@ -479,6 +481,7 @@ function ChatView(props: {
           timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         },
         setBusy,
+        (m) => (usedModel = m),
       );
       const rec: StoredDigest = {
         id: newId(),
@@ -487,7 +490,7 @@ function ChatView(props: {
         from: selected[0].ts,
         to: selected[selected.length - 1].ts,
         messageCount: selected.length,
-        model: `${settings.provider}/${settings.model}`,
+        model: `${settings.provider}/${usedModel}`,
         digest,
       };
       await putDigest(rec);
@@ -546,11 +549,11 @@ function ChatView(props: {
             {busy ?? `Summarize ${selected.length} messages`}
           </button>
           <span className="muted small">
-            Using {settings.model}
+            {settings.model ? `Using ${settings.model}` : 'Using the newest model (automatic)'}
           </span>
         </div>
         {!selected.length && chat.messages.length > 0 && <p className="muted small">No new messages in this range. Import a newer export.</p>}
-        {error && <p className="error">{error}</p>}
+        {error && <ErrorBox message={error} />}
       </div>
 
       {digests.map((d, i) => (
@@ -587,6 +590,34 @@ function digestAsText(chatName: string, d: Digest): string {
       d.events.map((e) => `${e.title}: ${e.date}${e.start_time ? ` ${e.start_time}` : ''}${e.location ? `, ${e.location}` : ''}`),
     )
   ).trim();
+}
+
+function friendlyError(msg: string): { title: string; hint: string } {
+  if (/rejected the key|401|403|API key not valid|invalid.*key/i.test(msg))
+    return { title: "The AI didn't accept your key", hint: 'Check the key in AI and settings, or sign in again.' };
+  if (/\b429\b|free daily limit|rate limit|quota/i.test(msg))
+    return { title: 'The free limit is used up for now', hint: 'Try again in a minute, or tomorrow.' };
+  if (/\b402\b|no credit/i.test(msg)) return { title: 'No credit left on the AI account', hint: 'Add credit with the provider, or switch to a free option.' };
+  if (/no longer available|not found|deprecated|retired|404|No models found/i.test(msg))
+    return { title: "That AI model isn't available", hint: 'Open AI and settings and tap Check connection, or try another AI there.' };
+  if (/Failed to fetch|NetworkError|Load failed|network/i.test(msg))
+    return { title: "Couldn't reach the AI", hint: 'Check your internet connection and try again.' };
+  if (/No messages/i.test(msg)) return { title: 'Nothing to summarize', hint: 'Pick a longer time range or import a newer export.' };
+  return { title: 'The summary didn\'t work', hint: 'Try again. If it keeps failing, try another AI in AI and settings.' };
+}
+
+function ErrorBox({ message }: { message: string }) {
+  const f = friendlyError(message);
+  return (
+    <div className="error-box" role="alert">
+      <strong>{f.title}</strong>
+      <span>{f.hint}</span>
+      <details>
+        <summary>Details</summary>
+        <p>{message}</p>
+      </details>
+    </div>
+  );
 }
 
 function DigestCard({ rec, chatName, open, onToast }: { rec: StoredDigest; chatName: string; open: boolean; onToast: (s: string) => void }) {
@@ -829,7 +860,8 @@ function Settings({
       const { listModels } = await providers();
       const list = await listModels(settings);
       setModels(list);
-      onToast(`Connected. ${list.length} models available.`);
+      const auto = rankModels(settings.provider, list)[0];
+      onToast(settings.model ? `Connected. ${list.length} models available.` : `Connected. Automatic choice: ${auto ?? 'none found'}.`);
     } catch (e) {
       onToast(e instanceof Error ? e.message : String(e));
     } finally {
@@ -914,13 +946,29 @@ function Settings({
 
         <label>
           Model
-          <input list="models" value={settings.model} onChange={(e) => onChange({ ...settings, model: e.target.value.trim() })} />
+          <input
+            list="models"
+            placeholder="Automatic (newest fast model)"
+            value={settings.model}
+            onChange={(e) => onChange({ ...settings, model: e.target.value.trim() })}
+          />
           <datalist id="models">
             {models.map((m) => (
               <option key={m} value={m} />
             ))}
           </datalist>
         </label>
+        <p className="muted small">
+          Leave empty and the app picks the newest fast model, and switches by itself if the provider retires one.
+          {settings.model && (
+            <>
+              {' '}
+              <button className="link inline" onClick={() => onChange({ ...settings, model: '' })}>
+                Use automatic
+              </button>
+            </>
+          )}
+        </p>
         <div className="row">
           <button onClick={check} disabled={checking || (info.needsKey && !settings.apiKey)}>
             {checking ? 'Checking…' : 'Check connection and load models'}

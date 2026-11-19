@@ -1,3 +1,4 @@
+import { LEGACY_DEFAULTS } from './models';
 // Everything is stored on this device only, in IndexedDB.
 import type { Digest } from './digest';
 import type { ChatMessage } from './parser';
@@ -109,7 +110,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
 };
 
 export async function loadSettings(): Promise<AppSettings> {
-  return { ...DEFAULT_SETTINGS, ...((await getKv<AppSettings>('settings')) ?? {}) };
+  const s = { ...DEFAULT_SETTINGS, ...((await getKv<AppSettings>('settings')) ?? {}) };
+  // Older builds saved fixed model IDs that providers have since retired.
+  if (LEGACY_DEFAULTS.has(s.model)) s.model = '';
+  return s;
 }
 export async function saveSettings(s: AppSettings): Promise<void> {
   await setKv('settings', s);

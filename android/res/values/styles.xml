@@ -4,6 +4,7 @@
         <item name="android:colorPrimary">#0E9F7E</item>
         <item name="android:colorPrimaryDark">#EEF7F3</item>
         <item name="android:statusBarColor">#EEF7F3</item>
+        <item name="android:navigationBarColor">#EEF7F3</item>
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:colorAccent">#128C7E</item>
         <item name="android:windowBackground">@color/app_bg</item>
