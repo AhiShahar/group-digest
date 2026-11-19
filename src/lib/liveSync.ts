@@ -19,6 +19,11 @@ export interface SyncPairing {
   groups: string[]; // chosen group ids
   linkRequestedAt: number;
   unlink: number;
+  /** Link with phone number instead of a QR code: digits with country code, and when it was asked. */
+  pairPhone?: string;
+  pairAt?: number;
+  /** owner only: bump to make the server install updates now. */
+  update?: number;
   /** owner: runs the sync server. member: joined someone else's server with an invite. */
   role?: 'owner' | 'member';
   /** The server's inbox and public key, for invites and nudges. */
@@ -60,7 +65,8 @@ export interface SyncGroup {
 export interface BridgeState {
   v: number;
   version: string;
-  status: 'starting' | 'unlinked' | 'qr' | 'connected' | 'error' | 'removed';
+  status: 'starting' | 'unlinked' | 'qr' | 'code' | 'connected' | 'error' | 'removed';
+  code?: string | null; // pairing code for 'Link with phone number'
   qr: string | null;
   me: { name: string | null; number: string } | null;
   groups: SyncGroup[];
@@ -116,8 +122,18 @@ export async function pushConfig(p: SyncPairing): Promise<void> {
   const k = await keysFor(p);
   const config =
     p.role === 'member'
-      ? { v: 2, groups: p.groups, linkRequestedAt: p.linkRequestedAt, unlink: p.unlink, leave: !!p.leave }
-      : { v: 2, groups: p.groups, linkRequestedAt: p.linkRequestedAt, unlink: p.unlink, invites: p.invites ?? [], remove: p.remove ?? [] };
+      ? { v: 2, groups: p.groups, linkRequestedAt: p.linkRequestedAt, unlink: p.unlink, pairPhone: p.pairPhone, pairAt: p.pairAt, leave: !!p.leave }
+      : {
+          v: 2,
+          groups: p.groups,
+          linkRequestedAt: p.linkRequestedAt,
+          unlink: p.unlink,
+          pairPhone: p.pairPhone,
+          pairAt: p.pairAt,
+          update: p.update ?? 0,
+          invites: p.invites ?? [],
+          remove: p.remove ?? [],
+        };
   await call(p, 'PUT', 'config', { blob: await seal(k, 'config', config) });
   if (p.host) await nudge(p.relay, p.host, { type: 'ping', room: p.room }).catch(() => undefined);
 }

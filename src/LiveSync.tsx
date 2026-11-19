@@ -218,6 +218,49 @@ function Friends({ p, st, onUpdate, onToast }: { p: SyncPairing; st: BridgeState
   );
 }
 
+function PhoneLink({ p, st, member, onUpdate }: { p: SyncPairing; st: BridgeState; member: boolean; onUpdate: (p: SyncPairing) => Promise<void> }) {
+  const [phone, setPhone] = useState(p.pairPhone ?? '');
+  const [open, setOpen] = useState(st.status === 'code');
+  const [asked, setAsked] = useState(false);
+  if (st.version < '0.3.0') {
+    return member ? null : (
+      <p className="small muted">
+        Linking on this same phone? Reboot your instance in Oracle Cloud once to get "Link with phone number", then come back here.
+      </p>
+    );
+  }
+  const digits = phone.replace(/\D/g, '').replace(/^00/, '');
+  if (!open)
+    return (
+      <p className="small">
+        <button className="link inline" onClick={() => setOpen(true)}>
+          On this same phone? Link with your phone number instead
+        </button>
+      </p>
+    );
+  return (
+    <>
+      <label>
+        Your WhatsApp number, with country code
+        <input inputMode="tel" placeholder="+972 50 123 4567" value={phone} onChange={(e) => setPhone(e.target.value)} />
+      </label>
+      <div className="row">
+        <button
+          className={st.status === 'code' ? '' : 'primary'}
+          disabled={digits.length < 8 || digits.length > 15}
+          onClick={() => {
+            setAsked(true);
+            onUpdate({ ...p, pairPhone: digits, pairAt: Date.now(), linkRequestedAt: Date.now() });
+          }}
+        >
+          {st.status === 'code' ? 'Get a new code' : 'Get a code'}
+        </button>
+        {asked && st.status !== 'code' ? <span className="small muted">Asking the server…</span> : null}
+      </div>
+    </>
+  );
+}
+
 function JoinCard({ inv, onJoined, onToast }: { inv: ParsedInvite; onJoined: (p: SyncPairing) => void; onToast: (s: string) => void }) {
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
@@ -400,10 +443,35 @@ export default function LiveSync({ onToast, onSynced }: { onToast: (s: string) =
                 <h3>{member ? 'Link WhatsApp' : '2. Link WhatsApp'}</h3>
                 <p className="small">
                   On your phone open WhatsApp, then <b>Settings</b> (iPhone) or <b>⋮</b> (Android), <b>Linked devices</b>, <b>Link a device</b>,
-                  and scan this code. If you are on the phone itself, open this page on another screen to scan it.
+                  and scan this code.
                 </p>
                 <Qr value={st.qr} />
               </>
+            )}
+
+            {st?.status === 'code' && st.code && (
+              <>
+                <h3>{member ? 'Link WhatsApp' : '2. Link WhatsApp'}</h3>
+                <p className="sync-pair-code" style={{ fontSize: 34, fontWeight: 700, letterSpacing: 4, fontFamily: 'ui-monospace, monospace', margin: '8px 0' }}>
+                  {st.code}
+                </p>
+                <div className="row">
+                  <Copy text={st.code.replace('-', '')} label="Copy code" onToast={onToast} />
+                </div>
+                <ol className="small">
+                  <li>
+                    Open WhatsApp, then <b>Settings</b> (iPhone) or <b>⋮</b> (Android), <b>Linked devices</b>, <b>Link a device</b>.
+                  </li>
+                  <li>
+                    On the scan screen, tap <b>Link with phone number instead</b>. WhatsApp may also show a notification asking for the code: tap it.
+                  </li>
+                  <li>Type the code above. It is good for a few minutes; if it changes, use the new one.</li>
+                </ol>
+              </>
+            )}
+
+            {st && ['qr', 'code', 'unlinked'].includes(st.status) && (
+              <PhoneLink p={p} st={st} member={member} onUpdate={update} />
             )}
 
             {st?.status === 'connected' && (
