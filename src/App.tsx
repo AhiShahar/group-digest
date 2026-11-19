@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { buildIcs, downloadFile, googleCalendarUrl, outlookCalendarUrl, safeFilename } from './lib/calendar';
 import type { Digest, DigestEvent } from './lib/digest';
+import LiveSync from './LiveSync';
+import { loadPairing, pullMessages } from './lib/liveSync';
 import { addEventNative, bridge, canCapture, captureStatus, isAndroidApp, peekCaptured, takeNativeShare, type CaptureStatus } from './lib/android';
 import { finishOpenRouterSignIn, startOpenRouterSignIn } from './lib/openrouter';
 import { parseChatText, readExportFile } from './lib/parser';
@@ -192,6 +194,38 @@ export default function App() {
     window.addEventListener('groupdigest-resume', sync);
     return () => {
       clearInterval(timer);
+      window.removeEventListener('groupdigest-resume', sync);
+    };
+  }, [loaded, refreshChats]);
+
+  // Live sync: pull messages your sync server left in the relay.
+  useEffect(() => {
+    if (!loaded) return;
+    let running = false;
+    const sync = async () => {
+      if (running || document.visibilityState === 'hidden') return;
+      running = true;
+      try {
+        const p = await loadPairing();
+        if (p?.groups.length) {
+          const added = await pullMessages(p);
+          if (added) {
+            await refreshChats();
+            setToast(`Synced ${added} new message${added === 1 ? '' : 's'} from WhatsApp.`);
+          }
+        }
+      } catch {
+        /* offline or relay down: try again next time */
+      }
+      running = false;
+    };
+    sync();
+    const timer = setInterval(sync, 60_000);
+    document.addEventListener('visibilitychange', sync);
+    window.addEventListener('groupdigest-resume', sync);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', sync);
       window.removeEventListener('groupdigest-resume', sync);
     };
   }, [loaded, refreshChats]);
@@ -976,6 +1010,8 @@ function Settings({
         onChange={(r) => onChange({ ...settings, reminders: { ...r, repeat: r.repeat < r.lead ? r.repeat : 0 } })}
       />
 
+      <LiveSync onToast={onToast} onSynced={onWiped} />
+
       {canCapture && <LiveCapture chats={chats} />}
       {isAndroidApp && !canCapture && (
         <p className="muted small">
@@ -987,7 +1023,8 @@ function Settings({
       <div className="card">
         <p className="small">
           Chats, digests and keys live only on this device. The only network calls are to the AI provider you chose, with the
-          messages you asked it to summarize (phone numbers are masked first). Other group members have not agreed to AI processing, so consider
+          messages you asked it to summarize (phone numbers are masked first). If you turn on live sync, your own sync server passes messages
+          from the groups you chose through this app's relay, end-to-end encrypted, and they are deleted from the relay once this device has them. Other group members have not agreed to AI processing, so consider
           telling your group.
         </p>
         <button className="danger" onClick={wipe}>

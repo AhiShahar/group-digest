@@ -28,3 +28,4 @@ android/build
 android/dist
 android/assets/www
 android/*.keystore
+.wrangler
