@@ -117,3 +117,8 @@ input, select {
 .onboard { border-color: var(--brand); margin-top: 16px; }
 .onboard h2 { margin-top: 0; }
 button.big { width: 100%; min-height: 50px; font-size: 16.5px; margin-top: 8px; }
+.ok { color: var(--brand); font-weight: 600; }
+.groups { list-style: none; padding: 0; margin: 4px 0 0; display: grid; gap: 4px; }
+.check { flex-direction: row; align-items: center; gap: 10px; font-weight: 500; margin: 0; padding: 8px 4px; }
+.check input { width: 20px; height: 20px; flex: none; }
+button.link.inline { padding: 0; display: inline; font-size: inherit; }

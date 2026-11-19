@@ -120,17 +120,47 @@ export async function applyRetention(days: number): Promise<void> {
   if (!days) return;
   const cutoff = Date.now() - days * 864e5;
   for (const c of await listChats()) {
-    if (c.importedAt < cutoff && c.messages.length) {
-      await putChat({ ...c, messages: [] });
-    }
+    const kept = c.messages.filter((m) => m.ts >= cutoff);
+    if (kept.length !== c.messages.length) await putChat({ ...c, messages: kept });
   }
 }
 
 /** Merge a fresh export of the same group into the stored chat, keeping order and dropping repeats. */
 export function mergeMessages(oldMsgs: ChatMessage[], newMsgs: ChatMessage[]): ChatMessage[] {
-  const key = (m: ChatMessage) => `${m.ts}|${m.sender}|${m.text}`;
+  // Minute precision: exports drop seconds, live capture keeps them.
+  const key = (m: ChatMessage) => `${Math.floor(m.ts / 60000)}|${m.sender}|${m.text.trim()}`;
   const seen = new Set(oldMsgs.map(key));
   return [...oldMsgs, ...newMsgs.filter((m) => !seen.has(key(m)))].sort((a, b) => a.ts - b.ts);
+}
+
+/**
+ * Store messages captured live from notifications, grouped into chats by group name.
+ * Returns how many new messages were added.
+ */
+export async function storeCaptured(items: { chat: string; ts: number; sender: string | null; text: string }[]): Promise<number> {
+  if (!items.length) return 0;
+  const byChat = new Map<string, ChatMessage[]>();
+  for (const it of items) {
+    const list = byChat.get(it.chat) ?? [];
+    const media = /^(📷|🎥|🎤|📄|🖼|GIF|Sticker|Photo|Video|Voice message|Audio)\b/u.test(it.text.trim());
+    list.push({ ts: it.ts, sender: it.sender, text: it.text, media });
+    byChat.set(it.chat, list);
+  }
+  const chats = await listChats();
+  let added = 0;
+  for (const [name, msgs] of byChat) {
+    const existing = chats.find((c) => c.name === name);
+    if (existing) {
+      const merged = mergeMessages(existing.messages, msgs);
+      added += merged.length - existing.messages.length;
+      await putChat({ ...existing, messages: merged, importedAt: Date.now() });
+    } else {
+      const merged = mergeMessages([], msgs);
+      added += merged.length;
+      await putChat({ id: newId(), name, importedAt: Date.now(), messages: merged, focus: '', lastDigestEnd: null });
+    }
+  }
+  return added;
 }
 
 /** Pick up a file shared into the app from another app (Android share sheet). */

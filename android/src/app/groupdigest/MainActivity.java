@@ -152,6 +152,12 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        if (pageReady) web.evaluateJavascript("window.dispatchEvent(new Event('groupdigest-resume'))", null);
+    }
+
+    @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
@@ -334,6 +340,59 @@ public class MainActivity extends Activity {
                     }
                 }
             });
+        }
+
+        @JavascriptInterface
+        public String captureStatus() {
+            return CaptureStore.status(MainActivity.this);
+        }
+
+        @JavascriptInterface
+        public void setCaptureGroups(String json) {
+            try {
+                CaptureStore.setSelected(MainActivity.this, new org.json.JSONArray(json));
+            } catch (Exception ignored) {
+            }
+        }
+
+        @JavascriptInterface
+        public String peekCaptured() {
+            return CaptureStore.peek(MainActivity.this);
+        }
+
+        @JavascriptInterface
+        public void ackCaptured() {
+            CaptureStore.ack(MainActivity.this);
+        }
+
+        @JavascriptInterface
+        public void openCaptureSettings() {
+            runOnUiThread(new Runnable() {
+                public void run() {
+                    try {
+                        startActivity(new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"));
+                    } catch (ActivityNotFoundException e) {
+                        openAppInfo();
+                    }
+                }
+            });
+        }
+
+        /** Android 13+ blocks notification access for sideloaded apps until "Allow restricted settings" is tapped here. */
+        @JavascriptInterface
+        public void openAppInfo() {
+            runOnUiThread(new Runnable() {
+                public void run() {
+                    Intent i = new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                            Uri.parse("package:" + getPackageName()));
+                    startActivity(i);
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public int androidVersion() {
+            return android.os.Build.VERSION.SDK_INT;
         }
 
         @JavascriptInterface

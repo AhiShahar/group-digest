@@ -33,6 +33,8 @@ npm run build:apk     # writes android/dist/group-digest-<version>.apk
 
 The first build creates a test signing key at `android/group-digest-test.keystore`. Keep it: Android only installs updates signed with the same key. Set `KEYSTORE` and `KS_PASS` to use another.
 
+**Automatic capture (Android app only):** with notification access, the app saves messages from the WhatsApp groups the user ticks, as their notifications arrive (`CaptureService`). Private chats and unticked groups are ignored. It cannot see older history, muted groups, or messages read while the chat is open, and WhatsApp's notification previews must be on. Messages wait in a private file until the app stores them in IndexedDB, then merge with exports (duplicates are dropped). On Android 13+ a sideloaded app must first get App info > ⋮ > Allow restricted settings.
+
 **Installing the APK:** send the file to the phone (WhatsApp, email, Drive), tap it, allow "Install unknown apps" for the app you opened it from when asked, then tap Install. If Play Protect warns about an unknown developer, choose "Install anyway". Android 7 or newer.
 
 ## Develop

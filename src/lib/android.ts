@@ -9,10 +9,52 @@ interface AndroidBridge {
   shareFile(name: string, mime: string, content: string): void;
   openExternal(url: string): void;
   takePendingShare(): string; // JSON {name, b64} or ""
+  // Live capture from WhatsApp notifications (only in builds that have it)
+  captureStatus?(): string; // JSON CaptureStatus
+  setCaptureGroups?(json: string): void;
+  peekCaptured?(): string; // JSON CapturedMessage[]
+  ackCaptured?(): void;
+  openCaptureSettings?(): void;
+  openAppInfo?(): void;
+  androidVersion?(): number;
+}
+
+export interface CaptureStatus {
+  enabled: boolean;
+  seen: string[];
+  selected: string[];
+}
+
+export interface CapturedMessage {
+  chat: string;
+  ts: number;
+  sender: string | null;
+  text: string;
 }
 
 export const bridge: AndroidBridge | undefined = (window as unknown as { AndroidBridge?: AndroidBridge }).AndroidBridge;
 export const isAndroidApp = !!bridge;
+export const canCapture = !!bridge?.captureStatus;
+
+export function captureStatus(): CaptureStatus | null {
+  if (!bridge?.captureStatus) return null;
+  try {
+    return JSON.parse(bridge.captureStatus()) as CaptureStatus;
+  } catch {
+    return null;
+  }
+}
+
+/** Read messages captured since last time. Call ackCaptured() once they are stored. */
+export function peekCaptured(): CapturedMessage[] {
+  if (!bridge?.peekCaptured) return [];
+  try {
+    return JSON.parse(bridge.peekCaptured()) as CapturedMessage[];
+  } catch {
+    return [];
+  }
+}
+
 
 export function addEventNative(e: DigestEvent, chatName: string): void {
   const { start, end, allDay } = eventTimes(e);

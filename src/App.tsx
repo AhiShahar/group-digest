@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { buildIcs, downloadFile, googleCalendarUrl, outlookCalendarUrl, safeFilename } from './lib/calendar';
 import type { Digest, DigestEvent } from './lib/digest';
-import { addEventNative, bridge, isAndroidApp, takeNativeShare } from './lib/android';
+import { addEventNative, bridge, canCapture, captureStatus, isAndroidApp, peekCaptured, takeNativeShare, type CaptureStatus } from './lib/android';
 import { finishOpenRouterSignIn, startOpenRouterSignIn } from './lib/openrouter';
 import { parseChatText, readExportFile } from './lib/parser';
 import { PROVIDERS, providerInfo, type ProviderId } from './lib/providerInfo';
@@ -20,6 +20,7 @@ import {
   putChat,
   putDigest,
   saveSettings,
+  storeCaptured,
   takeSharedFiles,
   type AppSettings,
   type StoredChat,
@@ -125,6 +126,26 @@ export default function App() {
     return () => clearTimeout(t);
   }, [toast]);
 
+  // Android live capture: pull messages saved from WhatsApp notifications.
+  useEffect(() => {
+    if (!canCapture || !loaded) return;
+    const sync = async () => {
+      const items = peekCaptured();
+      if (!items.length) return;
+      const added = await storeCaptured(items);
+      bridge?.ackCaptured?.();
+      await refreshChats();
+      if (added) setToast(`Saved ${added} new message${added === 1 ? '' : 's'} from WhatsApp.`);
+    };
+    sync();
+    const timer = setInterval(sync, 60_000);
+    window.addEventListener('groupdigest-resume', sync);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('groupdigest-resume', sync);
+    };
+  }, [loaded, refreshChats]);
+
   const updateSettings = async (s: AppSettings) => {
     setSettings(s);
     await saveSettings(s);
@@ -173,6 +194,12 @@ export default function App() {
           </div>
         )}
 
+        {view.name === 'chats' && canCapture && !needsSetup && <CaptureHint
+            onOpen={() => {
+              setView({ name: 'settings' });
+              setTimeout(() => document.getElementById('capture')?.scrollIntoView({ behavior: 'smooth' }), 50);
+            }}
+          />}
         {view.name === 'chats' && <ChatList chats={chats} onImport={importFiles} onOpen={(id) => setView({ name: 'chat', id })} />}
         {view.name === 'chat' && (
           <ChatView
@@ -184,7 +211,7 @@ export default function App() {
             onNeedSetup={() => setView({ name: 'settings' })}
           />
         )}
-        {view.name === 'settings' && <Settings settings={settings} onChange={updateSettings} onToast={setToast} onWiped={refreshChats} />}
+        {view.name === 'settings' && <Settings settings={settings} chats={chats} onChange={updateSettings} onToast={setToast} onWiped={refreshChats} />}
       </main>
 
       {toast && (
@@ -213,6 +240,22 @@ function Onboarding({ onGemini, onOther }: { onGemini: () => void; onOther: () =
           I have a Claude or OpenAI key
         </button>
       </div>
+    </div>
+  );
+}
+
+function CaptureHint({ onOpen }: { onOpen: () => void }) {
+  const [st, setSt] = useState<CaptureStatus | null>(captureStatus());
+  useEffect(() => {
+    const f = () => setSt(captureStatus());
+    window.addEventListener('groupdigest-resume', f);
+    return () => window.removeEventListener('groupdigest-resume', f);
+  }, []);
+  if (!st || (st.enabled && st.selected.length)) return null;
+  return (
+    <div className="banner subtle">
+      <span>{st.enabled ? 'Pick which groups to save automatically.' : 'Save new WhatsApp group messages automatically, without exporting.'}</span>
+      <button onClick={onOpen}>{st.enabled ? 'Pick groups' : 'Set up'}</button>
     </div>
   );
 }
@@ -401,7 +444,7 @@ function ChatView(props: {
           What to summarize
           <select value={range} onChange={(e) => setRange(e.target.value as Range)}>
             {chat.lastDigestEnd && <option value="since">New since last digest</option>}
-            <option value="1">Last day of the export</option>
+            <option value="1">Last day</option>
             <option value="7">Last 7 days</option>
             <option value="30">Last 30 days</option>
             <option value="all">Everything</option>
@@ -603,13 +646,87 @@ function EventInfo({ e, when }: { e: DigestEvent; when: string }) {
 
 // ---------------- Settings ----------------
 
+function LiveCapture({ chats }: { chats: StoredChat[] }) {
+  const [st, setSt] = useState<CaptureStatus | null>(captureStatus());
+  useEffect(() => {
+    const f = () => setSt(captureStatus());
+    window.addEventListener('groupdigest-resume', f);
+    const t = setInterval(f, 5000);
+    return () => {
+      window.removeEventListener('groupdigest-resume', f);
+      clearInterval(t);
+    };
+  }, []);
+  if (!st) return null;
+  const groups = [...new Set([...st.seen, ...st.selected, ...chats.map((c) => c.name)])].sort((a, b) => a.localeCompare(b));
+  const toggle = (name: string, on: boolean) => {
+    const next = on ? [...new Set([...st.selected, name])] : st.selected.filter((g) => g !== name);
+    bridge?.setCaptureGroups?.(JSON.stringify(next));
+    setSt({ ...st, selected: next });
+  };
+  const restricted = (bridge?.androidVersion?.() ?? 0) >= 33;
+  return (
+    <>
+      <h2 id="capture">Save messages automatically</h2>
+      <div className="card">
+        <p className="small">
+          With your permission, Group Digest reads WhatsApp notifications and saves messages from the groups you tick below. They stay on this
+          phone and show up in summaries next to your exports. Private chats and unticked groups are never saved.
+        </p>
+        <p className="small muted">
+          It only sees messages that arrive as notifications from now on: not older history, not muted groups, and not messages you read while
+          the chat is open. WhatsApp's notification previews must be on.
+        </p>
+        {st.enabled ? (
+          <p className="small ok">Notification access is on.</p>
+        ) : (
+          <>
+            <div className="row">
+              <button className="primary" onClick={() => bridge?.openCaptureSettings?.()}>
+                Allow notification access
+              </button>
+            </div>
+            <p className="small muted">Find Group Digest in the list and turn it on, then come back.</p>
+            {restricted && (
+              <p className="small muted">
+                If Android says the setting is restricted: open{' '}
+                <button className="link inline" onClick={() => bridge?.openAppInfo?.()}>
+                  App info
+                </button>
+                , tap ⋮ at the top right, choose Allow restricted settings, then try again.
+              </p>
+            )}
+          </>
+        )}
+        <h3>Groups to save</h3>
+        {groups.length === 0 ? (
+          <p className="small muted">Groups appear here after their first WhatsApp notification arrives. You can also import an export first.</p>
+        ) : (
+          <ul className="groups">
+            {groups.map((g) => (
+              <li key={g}>
+                <label className="check">
+                  <input type="checkbox" checked={st.selected.includes(g)} onChange={(e) => toggle(g, e.target.checked)} />
+                  {g}
+                </label>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </>
+  );
+}
+
 function Settings({
   settings,
+  chats,
   onChange,
   onToast,
   onWiped,
 }: {
   settings: AppSettings;
+  chats: StoredChat[];
   onChange: (s: AppSettings) => void;
   onToast: (s: string) => void;
   onWiped: () => void;
@@ -750,10 +867,12 @@ function Settings({
         </div>}
       </div>
 
+      {canCapture && <LiveCapture chats={chats} />}
+
       <h2>Privacy</h2>
       <div className="card">
         <p className="small">
-          Chats, digests and keys live only in this browser on this device. The only network calls are to the AI provider you chose, with the
+          Chats, digests and keys live only on this device. The only network calls are to the AI provider you chose, with the
           messages you asked it to summarize (phone numbers are masked first). Other group members have not agreed to AI processing, so consider
           telling your group.
         </p>
