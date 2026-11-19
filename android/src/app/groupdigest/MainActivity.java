@@ -8,6 +8,7 @@ import android.database.Cursor;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
+import android.view.View;
 import android.os.Parcelable;
 import android.provider.CalendarContract;
 import android.provider.OpenableColumns;
@@ -68,9 +69,20 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         Window w = getWindow();
-        w.setStatusBarColor(Color.parseColor("#0E6F64"));
+        boolean night = (getResources().getConfiguration().uiMode
+                & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
+                == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+        int bar = Color.parseColor(night ? "#171329" : "#EEF7F3");
+        w.setStatusBarColor(bar);
+        w.setNavigationBarColor(bar);
+        if (!night) {
+            int flags = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            if (android.os.Build.VERSION.SDK_INT >= 26) flags |= 0x00000010; // SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+            w.getDecorView().setSystemUiVisibility(flags);
+        }
 
         web = new WebView(this);
+        web.setBackgroundColor(bar);
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);

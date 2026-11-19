@@ -14,6 +14,7 @@ export interface ProviderInfo {
   label: string;
   keyHelp: string;
   keyUrl?: string;
+  /** Empty means automatic: the newest suitable model from the provider's own list. */
   defaultModel: string;
   needsKey: boolean;
 }
@@ -32,7 +33,7 @@ export const PROVIDERS: ProviderInfo[] = [
     label: 'Free: Google Gemini key',
     keyHelp: 'Free, no card needed: sign in to Google AI Studio, tap Create API key, and paste it here. Google may use free-tier content to improve its products.',
     keyUrl: 'https://aistudio.google.com/apikey',
-    defaultModel: 'gemini-2.5-flash',
+    defaultModel: '',
     needsKey: true,
   },
   {
@@ -40,7 +41,7 @@ export const PROVIDERS: ProviderInfo[] = [
     label: 'Claude (paid API key)',
     keyHelp: 'Create a key in the Claude Console. A Claude.ai Pro or Max subscription cannot be used by other apps.',
     keyUrl: 'https://platform.claude.com/settings/keys',
-    defaultModel: 'claude-opus-5-5',
+    defaultModel: '',
     needsKey: true,
   },
   {
@@ -48,14 +49,14 @@ export const PROVIDERS: ProviderInfo[] = [
     label: 'OpenAI (paid API key)',
     keyHelp: 'Create a key on the OpenAI platform. Usage is billed to that account.',
     keyUrl: 'https://platform.openai.com/api-keys',
-    defaultModel: 'gpt-5-mini',
+    defaultModel: '',
     needsKey: true,
   },
   {
     id: 'compatible',
     label: 'Local or other (OpenAI-compatible URL)',
     keyHelp: 'For Ollama, LM Studio or any OpenAI-compatible server. For Ollama use http://localhost:11434/v1 and allow this site in OLLAMA_ORIGINS.',
-    defaultModel: 'llama3.1',
+    defaultModel: '',
     needsKey: false,
   },
 ];
