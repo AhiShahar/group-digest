@@ -31,7 +31,7 @@ import makeWASocket, { Browsers, DisconnectReason, fetchLatestBaileysVersion, us
 import { deriveKeys, hostInbox, importHostKey, newHostKey, open, openSealed, seal } from './crypto.mjs';
 import { toRecord } from './parse.mjs';
 
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
 const SELF = fileURLToPath(import.meta.url);
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 
@@ -105,6 +105,9 @@ async function main() {
       this.config = { groups: [] };
       this.selected = new Set();
       this.linkRequestedAt = 0;
+      this.pairAt = 0;
+      this.pairPhone = null;
+      this.pairDone = null;
       this.unlinkSeen = null;
       this.queue = [];
       this.seen = new Set();
@@ -169,6 +172,16 @@ async function main() {
           this.linkRequestedAt = wantLink;
           if (!this.sock && Date.now() - this.linkRequestedAt < LINK_WINDOW_MS) this.connect();
         }
+        // Link with phone number: the app asks for an 8-character code instead of a QR scan.
+        const pairAt = Number(c.pairAt) || 0;
+        if (pairAt > this.pairAt && typeof c.pairPhone === 'string' && /^\d{7,15}$/.test(c.pairPhone)) {
+          this.pairAt = pairAt;
+          this.pairPhone = c.pairPhone;
+          this.pairDone = null;
+          if (this.sock && !this.sock.authState?.creds?.registered && this.state.status === 'qr') this.requestCode(this.sock);
+        }
+        if (this.owner && this.updateSeen !== undefined && (Number(c.update) || 0) > this.updateSeen) checkForUpdate();
+        this.updateSeen = Number(c.update) || 0;
         const unlink = Number(c.unlink) || 0;
         if (this.unlinkSeen === null) this.unlinkSeen = unlink; // first run: nothing to undo
         if (unlink > this.unlinkSeen) {
@@ -181,6 +194,24 @@ async function main() {
         if (this.owner) await host.ownerConfig(c);
       } catch (e) {
         log(this.label(), 'config poll failed:', e.message);
+      }
+    }
+
+    async requestCode(s) {
+      if (this.pairDone === s || !this.pairPhone || Date.now() - this.pairAt > LINK_WINDOW_MS) return;
+      this.pairDone = s;
+      try {
+        // Reuse the code for a few minutes across reconnects, so it doesn't change while someone types it.
+        const reuse = this.lastCode && this.lastCode.phone === this.pairPhone && Date.now() - this.lastCode.at < 3 * 60e3 ? this.lastCode.raw : undefined;
+        const raw = await s.requestPairingCode(this.pairPhone, reuse);
+        if (!reuse) this.lastCode = { raw, phone: this.pairPhone, at: Date.now() };
+        const code = raw.length === 8 ? `${raw.slice(0, 4)}-${raw.slice(4)}` : raw;
+        log(this.label(), 'pairing code ready');
+        this.setState({ status: 'code', code, qr: null, error: null });
+      } catch (e) {
+        this.pairDone = null;
+        log(this.label(), 'pairing code failed:', e.message);
+        this.setState({ error: 'Could not get a code for that number. Check it, with country code, and try again.' });
       }
     }
 
@@ -304,13 +335,16 @@ async function main() {
             this.setState({ status: 'unlinked', qr: null });
             return;
           }
-          this.setState({ status: 'qr', qr: u.qr, error: null });
+          if (this.pairPhone && Date.now() - this.pairAt < LINK_WINDOW_MS) {
+            this.requestCode(s); // keep showing the code; ignore new QR codes
+          } else this.setState({ status: 'qr', qr: u.qr, code: null, error: null });
         }
         if (u.connection === 'open') {
           this.retry = 0;
           const me = s.user ? { name: s.user.name || s.user.verifiedName || null, number: (s.user.id || '').split(':')[0].split('@')[0] } : null;
           log(this.label(), 'connected');
-          this.setState({ status: 'connected', qr: null, me, error: null });
+          this.pairPhone = null;
+          this.setState({ status: 'connected', qr: null, code: null, me, error: null });
           this.refreshGroups();
         }
         if (u.connection === 'close') {
