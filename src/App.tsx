@@ -33,6 +33,52 @@ const fmtDate = (ts: number) =>
   new Date(ts).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 const fmtDay = (ts: number) => new Date(ts).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 
+// iPhone and iPad have no install prompt: show steps in Safari until the app is on the Home Screen.
+function shouldShowIosInstall(): boolean {
+  const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const standalone = (navigator as unknown as { standalone?: boolean }).standalone || matchMedia('(display-mode: standalone)').matches;
+  let dismissed = false;
+  try {
+    dismissed = localStorage.getItem('ios-install-dismissed') === '1';
+  } catch {
+    /* private mode */
+  }
+  return ios && !standalone && !dismissed;
+}
+
+function IosInstallCard({ onDismiss }: { onDismiss: () => void }) {
+  return (
+    <div className="card onboard ios">
+      <h2>First, add Group Digest to your Home Screen</h2>
+      <ol className="steps">
+        <li>
+          Tap the <b>Share</b> button <span className="share-icon" aria-hidden="true">⬆︎</span> in Safari's toolbar.
+        </li>
+        <li>
+          Scroll down and tap <b>Add to Home Screen</b>, then <b>Add</b>.
+        </li>
+        <li>
+          Open <b>Digest</b> from your Home Screen and set it up there.
+        </li>
+      </ol>
+      <p className="muted small">The Home Screen app keeps its own chats and sign-in, so set it up there rather than in Safari.</p>
+      <button
+        className="link"
+        onClick={() => {
+          try {
+            localStorage.setItem('ios-install-dismissed', '1');
+          } catch {
+            /* ignore */
+          }
+          onDismiss();
+        }}
+      >
+        Continue in Safari instead
+      </button>
+    </div>
+  );
+}
+
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
 }
@@ -44,6 +90,7 @@ export default function App() {
   const [chats, setChats] = useState<StoredChat[]>([]);
   const [toast, setToast] = useState<string | null>(null);
   const [installEvt, setInstallEvt] = useState<BeforeInstallPromptEvent | null>(null);
+  const [iosInstall, setIosInstall] = useState(shouldShowIosInstall);
 
   const refreshChats = useCallback(async () => setChats(await listChats()), []);
 
@@ -171,7 +218,7 @@ export default function App() {
       </header>
 
       <main>
-        {needsSetup && view.name !== 'settings' && (
+        {needsSetup && !iosInstall && view.name !== 'settings' && (
           <Onboarding
             onGemini={async () => {
               await updateSettings({ ...settings, provider: 'gemini', apiKey: '', model: providerInfo('gemini').defaultModel });
@@ -180,6 +227,7 @@ export default function App() {
             onOther={() => setView({ name: 'settings' })}
           />
         )}
+        {iosInstall && <IosInstallCard onDismiss={() => setIosInstall(false)} />}
         {installEvt && (
           <div className="banner subtle">
             <span>Install Group Digest on this device for quick access and share-to-app.</span>

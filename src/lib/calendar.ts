@@ -109,7 +109,14 @@ export function outlookCalendarUrl(e: DigestEvent, chatName: string): string {
   return u.toString();
 }
 
+const isIos = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
 export function downloadFile(filename: string, content: string, type: string): void {
+  if (isIos() && type === 'text/calendar') {
+    // iPhone Safari opens calendar data with its own "Add to Calendar" screen.
+    location.href = `data:text/calendar;charset=utf-8,${encodeURIComponent(content)}`;
+    return;
+  }
   const blob = new Blob([content], { type });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

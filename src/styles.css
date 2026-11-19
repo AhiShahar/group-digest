@@ -122,3 +122,6 @@ button.big { width: 100%; min-height: 50px; font-size: 16.5px; margin-top: 8px; 
 .check { flex-direction: row; align-items: center; gap: 10px; font-weight: 500; margin: 0; padding: 8px 4px; }
 .check input { width: 20px; height: 20px; flex: none; }
 button.link.inline { padding: 0; display: inline; font-size: inherit; }
+.steps { padding-left: 22px; margin: 8px 0; }
+.steps li { margin: 6px 0; }
+.share-icon { display: inline-block; border: 1.5px solid currentColor; border-radius: 5px; padding: 0 5px; font-size: 13px; line-height: 18px; }

@@ -18,7 +18,9 @@ function callbackUrl(): string {
 export async function startOpenRouterSignIn(): Promise<void> {
   const verifier = b64url(crypto.getRandomValues(new Uint8Array(32)));
   const challenge = b64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
-  sessionStorage.setItem(VERIFIER_KEY, verifier);
+  // localStorage, not sessionStorage: on iPhone the sign-in page can return in a
+  // fresh browsing context, which would lose sessionStorage.
+  localStorage.setItem(VERIFIER_KEY, JSON.stringify({ verifier, at: Date.now() }));
   const url = new URL('https://openrouter.ai/auth');
   url.searchParams.set('callback_url', callbackUrl());
   url.searchParams.set('code_challenge', challenge);
@@ -30,10 +32,19 @@ export async function startOpenRouterSignIn(): Promise<void> {
 export async function finishOpenRouterSignIn(): Promise<string | null> {
   const params = new URLSearchParams(location.search);
   const code = params.get('code');
-  const verifier = sessionStorage.getItem(VERIFIER_KEY);
-  if (!code || !verifier) return null;
-  sessionStorage.removeItem(VERIFIER_KEY);
+  if (!code) return null;
   history.replaceState(null, '', callbackUrl());
+  let verifier: string | null = null;
+  try {
+    const saved = JSON.parse(localStorage.getItem(VERIFIER_KEY) ?? 'null') as { verifier: string; at: number } | null;
+    if (saved && Date.now() - saved.at < 15 * 60_000) verifier = saved.verifier;
+  } catch {
+    /* ignore */
+  }
+  localStorage.removeItem(VERIFIER_KEY);
+  if (!verifier) {
+    throw new Error('Sign-in finished in a different window. Open Group Digest from your Home Screen and tap Sign in again.');
+  }
   const res = await fetch('https://openrouter.ai/api/v1/auth/keys', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
