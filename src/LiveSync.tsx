@@ -4,6 +4,11 @@ import QRCode from 'qrcode';
 import { useEffect, useMemo, useState } from 'react';
 import {
   createPairing,
+  inviteLink,
+  joinWithInvite,
+  newInvite,
+  parseInvite,
+  type ParsedInvite,
   fetchState,
   gcloudCommand,
   installLine,
@@ -120,16 +125,152 @@ function SetupSteps({ p, onToast }: { p: SyncPairing; onToast: (s: string) => vo
   );
 }
 
+function Friends({ p, st, onUpdate, onToast }: { p: SyncPairing; st: BridgeState; onUpdate: (p: SyncPairing) => Promise<void>; onToast: (s: string) => void }) {
+  const [name, setName] = useState('');
+  const [lastLink, setLastLink] = useState<string | null>(null);
+  const host = st.host;
+  if (!host) return null;
+  const members = host.members;
+  const used = new Set(members.map((m) => m.code));
+  const pending = (p.invites ?? []).filter((i) => !used.has(i.code));
+  const from = st.me?.name ?? '';
+  return (
+    <>
+      <h3>Friends on your server</h3>
+      <p className="small muted">
+        Invite someone and they can link their own WhatsApp to your server with no setup. Each person's messages are encrypted for their phone
+        only: you can't read theirs and they can't read yours. {members.length} of {host.max} places used.
+      </p>
+      <div className="row">
+        <input placeholder="Friend's name" value={name} onChange={(e) => setName(e.target.value)} style={{ flex: 1, minWidth: 140 }} />
+        <button
+          className="primary"
+          disabled={!name.trim() || members.length + pending.length >= host.max}
+          onClick={async () => {
+            const inv = newInvite(name);
+            const next = { ...p, host: { inbox: host.inbox, pub: host.pub }, invites: [...(p.invites ?? []), inv] };
+            await onUpdate(next);
+            const link = inviteLink(next, inv, from);
+            setLastLink(link);
+            setName('');
+            try {
+              if (navigator.share) await navigator.share({ title: 'Group Digest invite', text: `Join my Group Digest live sync: ${link}` });
+              else {
+                await navigator.clipboard.writeText(link);
+                onToast('Invite link copied.');
+              }
+            } catch {
+              /* share sheet closed */
+            }
+          }}
+        >
+          Create invite
+        </button>
+      </div>
+      {lastLink && (
+        <>
+          <pre className="sync-code" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontSize: 12, userSelect: 'all' }}>
+            {lastLink}
+          </pre>
+          <p className="small muted">Send this link to your friend. It works once. Anyone with the link can use it, so send it privately.</p>
+          <div className="row">
+            <Copy text={lastLink} label="Copy link" onToast={onToast} />
+          </div>
+        </>
+      )}
+      {(members.length > 0 || pending.length > 0) && (
+        <ul className="groups">
+          {members.map((m) => (
+            <li key={m.room} className="row" style={{ justifyContent: 'space-between' }}>
+              <span>
+                {m.name || 'Friend'}{' '}
+                <span className="muted small">
+                  · {m.status === 'connected' ? 'linked' : m.status === 'qr' ? 'scanning QR' : m.status}
+                  {m.lastMessageAt ? ` · last sync ${ago(m.lastMessageAt)}` : ''}
+                </span>
+              </span>
+              <button
+                className="danger"
+                onClick={async () => {
+                  if (!confirm(`Remove ${m.name || 'this friend'}? Their WhatsApp is unlinked from your server.`)) return;
+                  await onUpdate({ ...p, remove: [...new Set([...(p.remove ?? []), m.room])] });
+                  onToast('Removing. This takes up to a minute.');
+                }}
+              >
+                Remove
+              </button>
+            </li>
+          ))}
+          {pending.map((i) => (
+            <li key={i.code} className="row" style={{ justifyContent: 'space-between' }}>
+              <span>
+                {i.name || 'Invite'} <span className="muted small">· invite not used yet</span>
+              </span>
+              <span className="row">
+                <Copy text={inviteLink(p.host ? p : { ...p, host }, i, from)} label="Copy link" onToast={onToast} />
+                <button onClick={() => onUpdate({ ...p, invites: (p.invites ?? []).filter((x) => x.code !== i.code) })}>Cancel</button>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  );
+}
+
+function JoinCard({ inv, onJoined, onToast }: { inv: ParsedInvite; onJoined: (p: SyncPairing) => void; onToast: (s: string) => void }) {
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  return (
+    <>
+      <p className="small">
+        <b>{inv.from || 'A friend'}</b> invited you to live sync. Link your WhatsApp once with a QR code and messages from the groups you choose
+        flow into this app automatically. Your messages are encrypted for this phone only; {inv.from || 'your friend'} can't read them.
+      </p>
+      <p className="small muted">
+        This uses an unofficial WhatsApp connection. WhatsApp could in rare cases restrict an account that uses one.
+      </p>
+      <label>
+        Your name (so {inv.from || 'your friend'} knows who joined)
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name" />
+      </label>
+      <div className="row">
+        <button
+          className="primary"
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              const p = await joinWithInvite(inv, name);
+              history.replaceState(null, '', location.pathname + location.search);
+              onJoined(p);
+            } catch (e) {
+              onToast(e instanceof Error ? e.message : String(e));
+            }
+            setBusy(false);
+          }}
+        >
+          Join and link WhatsApp
+        </button>
+      </div>
+    </>
+  );
+}
+
 export default function LiveSync({ onToast, onSynced }: { onToast: (s: string) => void; onSynced: () => void }) {
   const [p, setP] = useState<SyncPairing | null | undefined>(undefined);
   const [st, setSt] = useState<BridgeState | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
   const [busy, setBusy] = useState(false);
+  const invite = useMemo(() => parseInvite(location.hash), []);
 
   useEffect(() => {
-    loadPairing().then((v) => setP(v ?? null));
-  }, []);
+    loadPairing().then((v) => {
+      setP(v ?? null);
+      if (invite) setTimeout(() => document.getElementById('live-sync')?.scrollIntoView({ behavior: 'smooth' }), 100);
+    });
+  }, [invite]);
 
   const update = async (next: SyncPairing) => {
     setP(next);
@@ -151,6 +292,13 @@ export default function LiveSync({ onToast, onSynced }: { onToast: (s: string) =
         if (stop) return;
         setSt(s);
         setErr(null);
+        // The owner learns the server's invite key from its status.
+        if (s?.host && p.role !== 'member' && (p.host?.pub !== s.host.pub || p.host?.inbox !== s.host.inbox)) {
+          const next = { ...p, role: 'owner' as const, host: { inbox: s.host.inbox, pub: s.host.pub } };
+          setP(next);
+          await savePairing(next);
+          return;
+        }
         // Ask for QR codes when the server is up but not linked.
         if (s && s.status === 'unlinked' && Date.now() - p.linkRequestedAt > 8 * 60e3) await update({ ...p, linkRequestedAt: Date.now() });
       } catch (e) {
@@ -173,13 +321,28 @@ export default function LiveSync({ onToast, onSynced }: { onToast: (s: string) =
 
   if (p === undefined) return null;
 
-  const serverSeen = st ? Date.now() - st.at < 12 * 60e3 : false;
+  const member = p?.role === 'member';
+  const serverSeen = st ? Date.now() - st.at < 25 * 60e3 : false;
+  const whose = member ? `${p?.hostName || 'your friend'}'s sync server` : 'Sync server';
+  const forget = async () => {
+    try {
+      // Tell the server to unlink (and, for a friend, to drop us), and delete undelivered messages.
+      await update({ ...p!, groups: [], unlink: p!.unlink + 1, linkRequestedAt: 0, leave: member ? true : undefined });
+      await dropPending(p!);
+    } catch {
+      /* relay may already be gone */
+    }
+    await savePairing(null);
+    setP(null);
+    setSt(null);
+  };
 
   return (
     <>
       <h2 id="live-sync">Live sync from WhatsApp</h2>
       <div className="card">
-        {!p ? (
+        {!p && invite && <JoinCard inv={invite} onJoined={setP} onToast={onToast} />}
+        {!p && !invite && (
           <>
             <p className="small">
               Link WhatsApp once with a QR code, like WhatsApp Web, and messages from the groups you choose flow in automatically, on iPhone and
@@ -187,8 +350,8 @@ export default function LiveSync({ onToast, onSynced }: { onToast: (s: string) =
               and this app.
             </p>
             <p className="small muted">
-              This uses an unofficial WhatsApp connection. WhatsApp could in rare cases restrict an account that uses one, so start with your own
-              number.
+              Got an invite link from a friend? Open it on this phone instead. This uses an unofficial WhatsApp connection; WhatsApp could in
+              rare cases restrict an account that uses one, so start with your own number.
             </p>
             <div className="row">
               <button
@@ -208,26 +371,33 @@ export default function LiveSync({ onToast, onSynced }: { onToast: (s: string) =
               </button>
             </div>
           </>
-        ) : (
+        )}
+        {p && (
           <>
             {err && <p className="small warn">{err}</p>}
-            {!st && <SetupSteps p={p} onToast={onToast} />}
-            {!st && <p className="small muted">Waiting for your server to check in…</p>}
+            {!st && !member && <SetupSteps p={p} onToast={onToast} />}
+            {!st && <p className="small muted">{member ? `Waiting for ${whose}…` : 'Waiting for your server to check in…'}</p>}
 
-            {st && (
+            {st && st.status !== 'removed' && (
               <p className={serverSeen ? 'small ok' : 'small warn'}>
-                {serverSeen ? 'Sync server is online' : `Sync server last seen ${ago(st.at)}. Check that the VM is running.`}
+                {serverSeen ? `${whose} is online` : `${whose} last seen ${ago(st.at)}.${member ? '' : ' Check that the VM is running.'}`}
                 {st.status === 'connected' && st.me ? ` · linked to ${st.me.name ?? ''} +${st.me.number}` : ''}
               </p>
             )}
             {st?.error && <p className="small warn">{st.error}</p>}
+            {!member && st && st.version < '0.2.0' && (
+              <p className="small warn">
+                Your server needs a one-time restart to get friend invites: in Oracle Cloud open your instance and press Reboot. It updates itself
+                after that.
+              </p>
+            )}
 
-            {st?.status === 'unlinked' && <p className="small">Getting a QR code from your server…</p>}
+            {st?.status === 'unlinked' && <p className="small">Getting a QR code from the server…</p>}
             {st?.status === 'starting' && <p className="small">Connecting to WhatsApp…</p>}
 
             {st?.status === 'qr' && st.qr && (
               <>
-                <h3>2. Link WhatsApp</h3>
+                <h3>{member ? 'Link WhatsApp' : '2. Link WhatsApp'}</h3>
                 <p className="small">
                   On your phone open WhatsApp, then <b>Settings</b> (iPhone) or <b>⋮</b> (Android), <b>Linked devices</b>, <b>Link a device</b>,
                   and scan this code. If you are on the phone itself, open this page on another screen to scan it.
@@ -270,38 +440,41 @@ export default function LiveSync({ onToast, onSynced }: { onToast: (s: string) =
               </>
             )}
 
-            <div className="row">
-              {st?.status === 'connected' && (
+            {!member && st?.host && <Friends p={p} st={st} onUpdate={update} onToast={onToast} />}
+
+            {st?.status === 'removed' ? (
+              <div className="row">
+                <button className="primary" onClick={forget}>
+                  OK
+                </button>
+              </div>
+            ) : (
+              <div className="row">
+                {st?.status === 'connected' && (
+                  <button
+                    onClick={async () => {
+                      if (!confirm('Unlink WhatsApp from the sync server? You can link again with a new QR code.')) return;
+                      await update({ ...p, unlink: p.unlink + 1, linkRequestedAt: 0 });
+                      onToast('Unlinking. This takes up to a minute.');
+                    }}
+                  >
+                    Unlink WhatsApp
+                  </button>
+                )}
                 <button
+                  className="danger"
                   onClick={async () => {
-                    if (!confirm('Unlink WhatsApp from your sync server? You can link again with a new QR code.')) return;
-                    await update({ ...p, unlink: p.unlink + 1, linkRequestedAt: 0 });
-                    onToast('Unlinking. This takes up to a minute.');
+                    const q = member
+                      ? `Leave ${whose}? Your WhatsApp is unlinked from it. Messages already saved stay on this device.`
+                      : 'Forget this sync server? Messages already saved stay on this device. You will need to set up a server again.';
+                    if (confirm(q)) await forget();
                   }}
                 >
-                  Unlink WhatsApp
+                  {member ? 'Leave' : 'Forget sync server'}
                 </button>
-              )}
-              <button
-                className="danger"
-                onClick={async () => {
-                  if (!confirm('Forget this sync server? Messages already saved stay on this device. You will need to set up a server again.')) return;
-                  try {
-                    // Tell the server to unlink, and delete any undelivered messages.
-                    await update({ ...p, groups: [], unlink: p.unlink + 1, linkRequestedAt: 0 });
-                    await dropPending(p);
-                  } catch {
-                    /* relay may already be gone */
-                  }
-                  await savePairing(null);
-                  setP(null);
-                  setSt(null);
-                }}
-              >
-                Forget sync server
-              </button>
-            </div>
-            {st && (
+              </div>
+            )}
+            {st && !member && (
               <details className="small">
                 <summary>Server setup again</summary>
                 <SetupSteps p={p} onToast={onToast} />

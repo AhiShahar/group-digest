@@ -90,7 +90,8 @@ interface BeforeInstallPromptEvent extends Event {
 }
 
 export default function App() {
-  const [view, setView] = useState<View>({ name: 'chats' });
+  // An invite link (#join=...) opens straight on the live sync settings.
+  const [view, setView] = useState<View>(() => (location.hash.includes('join=') ? { name: 'settings' } : { name: 'chats' }));
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [loaded, setLoaded] = useState(false);
   const [chats, setChats] = useState<StoredChat[]>([]);

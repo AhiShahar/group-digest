@@ -3,7 +3,7 @@
 // of messages there; this pulls, decrypts and stores them, then deletes them
 // from the relay. Nothing here can be read by the relay.
 import { getKv, setKv, storeCaptured } from './store';
-import { deriveKeys, newPairing, open, seal, type SyncKeys } from './syncCrypto';
+import { deriveKeys, newInviteCode, newPairing, open, seal, sealTo, type SyncKeys } from './syncCrypto';
 
 /** Where the relay lives. The web app uses its own origin; the Android app uses the hosted one. */
 export const RELAY_URL: string =
@@ -19,6 +19,36 @@ export interface SyncPairing {
   groups: string[]; // chosen group ids
   linkRequestedAt: number;
   unlink: number;
+  /** owner: runs the sync server. member: joined someone else's server with an invite. */
+  role?: 'owner' | 'member';
+  /** The server's inbox and public key, for invites and nudges. */
+  host?: HostInfo;
+  /** owner only: invites handed out, and friends to remove. */
+  invites?: Invite[];
+  remove?: string[];
+  /** member only: who invited them, and a request to leave. */
+  hostName?: string;
+  leave?: boolean;
+}
+
+export interface HostInfo {
+  inbox: string;
+  pub: string;
+}
+
+export interface Invite {
+  code: string;
+  name: string;
+  createdAt: number;
+}
+
+export interface Member {
+  room: string;
+  name: string | null;
+  code: string | null;
+  joinedAt: number;
+  status: BridgeState['status'];
+  lastMessageAt: number;
 }
 
 export interface SyncGroup {
@@ -30,13 +60,14 @@ export interface SyncGroup {
 export interface BridgeState {
   v: number;
   version: string;
-  status: 'starting' | 'unlinked' | 'qr' | 'connected' | 'error';
+  status: 'starting' | 'unlinked' | 'qr' | 'connected' | 'error' | 'removed';
   qr: string | null;
   me: { name: string | null; number: string } | null;
   groups: SyncGroup[];
   error: string | null;
   lastMessageAt: number;
   at: number; // when the server last reported
+  host?: HostInfo & { max: number; members: Member[] }; // owner only
 }
 
 interface SyncedMessage {
@@ -75,7 +106,7 @@ async function call<T>(p: SyncPairing, method: string, op: string, body?: unknow
 
 export async function createPairing(): Promise<SyncPairing> {
   const { room, secret } = newPairing();
-  const p: SyncPairing = { room, secret, relay: RELAY_URL, createdAt: Date.now(), cursor: 0, groups: [], linkRequestedAt: Date.now(), unlink: 0 };
+  const p: SyncPairing = { room, secret, relay: RELAY_URL, createdAt: Date.now(), cursor: 0, groups: [], linkRequestedAt: Date.now(), unlink: 0, role: 'owner' };
   await savePairing(p);
   await pushConfig(p); // claims the room with this token
   return p;
@@ -83,8 +114,75 @@ export async function createPairing(): Promise<SyncPairing> {
 
 export async function pushConfig(p: SyncPairing): Promise<void> {
   const k = await keysFor(p);
-  const blob = await seal(k, 'config', { v: 1, groups: p.groups, linkRequestedAt: p.linkRequestedAt, unlink: p.unlink });
-  await call(p, 'PUT', 'config', { blob });
+  const config =
+    p.role === 'member'
+      ? { v: 2, groups: p.groups, linkRequestedAt: p.linkRequestedAt, unlink: p.unlink, leave: !!p.leave }
+      : { v: 2, groups: p.groups, linkRequestedAt: p.linkRequestedAt, unlink: p.unlink, invites: p.invites ?? [], remove: p.remove ?? [] };
+  await call(p, 'PUT', 'config', { blob: await seal(k, 'config', config) });
+  if (p.host) await nudge(p.relay, p.host, { type: 'ping', room: p.room }).catch(() => undefined);
+}
+
+/** Drop a sealed note in the server's inbox, so it reacts now instead of on its next check. */
+async function nudge(relay: string, host: HostInfo, note: unknown): Promise<void> {
+  const res = await fetch(`${relay}/api/sync/${host.inbox}/inbox`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ blob: await sealTo(host.pub, note) }),
+  });
+  if (!res.ok) throw new Error(res.status === 404 ? 'That sync server is not running.' : `Could not reach the sync server (${res.status}).`);
+}
+
+// ---- invites -----------------------------------------------------------------------
+
+export interface ParsedInvite extends HostInfo {
+  code: string;
+  from: string;
+}
+
+/** Invite links look like https://<app>/#join=<inbox>.<pub>.<code>.<from> */
+export function parseInvite(hash: string): ParsedInvite | null {
+  const m = /[#&]join=([a-f0-9]{32})\.([A-Za-z0-9_-]{80,100})\.([A-Za-z0-9_-]{10,40})(?:\.([^&]*))?/.exec(hash);
+  if (!m) return null;
+  let from = '';
+  try {
+    from = decodeURIComponent(m[4] ?? '').slice(0, 40);
+  } catch {
+    /* ignore */
+  }
+  return { inbox: m[1], pub: m[2], code: m[3], from };
+}
+
+export function inviteLink(p: SyncPairing, inv: Invite, from: string): string {
+  if (!p.host) throw new Error('Your sync server has not checked in yet.');
+  return `${p.relay}/#join=${p.host.inbox}.${p.host.pub}.${inv.code}.${encodeURIComponent(from)}`;
+}
+
+export function newInvite(name: string): Invite {
+  return { code: newInviteCode(), name: name.trim().slice(0, 40), createdAt: Date.now() };
+}
+
+/** Join a friend's sync server with an invite. */
+export async function joinWithInvite(inv: ParsedInvite, name: string): Promise<SyncPairing> {
+  const { room, secret } = newPairing();
+  const p: SyncPairing = {
+    room,
+    secret,
+    relay: RELAY_URL,
+    createdAt: Date.now(),
+    cursor: 0,
+    groups: [],
+    linkRequestedAt: Date.now(),
+    unlink: 0,
+    role: 'member',
+    host: { inbox: inv.inbox, pub: inv.pub },
+    hostName: inv.from,
+  };
+  const k = await keysFor(p);
+  // Claim our own room first, so only this phone and the server can use it.
+  await call(p, 'PUT', 'config', { blob: await seal(k, 'config', { v: 2, groups: [], linkRequestedAt: p.linkRequestedAt, unlink: 0, leave: false }) });
+  await nudge(p.relay, p.host!, { type: 'join', code: inv.code, room, secret, name: name.trim().slice(0, 40) });
+  await savePairing(p);
+  return p;
 }
 
 export async function fetchState(p: SyncPairing): Promise<BridgeState | null> {

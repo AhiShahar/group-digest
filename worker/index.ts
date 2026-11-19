@@ -15,6 +15,13 @@
 //   POST /ack       {"upTo": seq}        delete delivered batches
 //   POST /reset                          wipe the room (unlink)
 //
+// Host inbox (a sync server that hosts friends): anyone who has the inbox id
+// from an invite link may drop a small sealed note (join request, "my config
+// changed"); only the server can read and clear it.
+//   POST /inbox      no auth, body {"blob": ...} <= 4 KB, at most 500 waiting
+//   GET  /inbox?after=<seq>
+//   POST /inbox-ack  {"upTo": seq}
+//
 // Auth: "Authorization: Bearer <token>". The room remembers the SHA-256 of the
 // first token it sees and refuses any other. Room ids are 128-bit random.
 
@@ -31,6 +38,8 @@ interface Env extends PushEnv {
 const MAX_BLOB = 256 * 1024; // bytes of base64 text per request
 const KEEP_MS = 7 * 864e5; // undelivered batches are dropped after 7 days
 const MAX_BATCHES = 2000;
+const MAX_NOTE = 4096; // inbox notes
+const MAX_NOTES = 500;
 
 const cors = {
   'access-control-allow-origin': '*',
@@ -58,12 +67,19 @@ function sameString(a: string, b: string): boolean {
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
-    const m = /^\/api\/sync\/([a-f0-9]{32})\/(state|config|messages|ack|reset)$/.exec(url.pathname);
+    const m = /^\/api\/sync\/([a-f0-9]{32})\/(state|config|messages|ack|reset|inbox|inbox-ack)$/.exec(url.pathname);
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(req);
     const push = /^\/api\/push\/([a-z]+)$/.exec(url.pathname);
     if (push) return handlePush(req, env, push[1]);
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
     if (!m) return json({ error: 'not found' }, 404);
+    if (m[2] === 'inbox' && req.method === 'POST') {
+      const body = await req.text();
+      if (body.length > MAX_NOTE + 64) return json({ error: 'too large' }, 413);
+      const room = env.SYNC.get(env.SYNC.idFromName(m[1]));
+      const res = (await room.drop(body)) as unknown as Result;
+      return json(res.body, res.status);
+    }
     const token = /^Bearer ([A-Za-z0-9_-]{20,100})$/.exec(req.headers.get('authorization') ?? '')?.[1];
     if (!token) return json({ error: 'missing token' }, 401);
     const len = Number(req.headers.get('content-length') ?? 0);
@@ -129,11 +145,47 @@ export class SyncRoom extends DurableObject<Env> {
       if (rows.size) await s.delete([...rows.keys()]);
       return { status: 200, body: { deleted: rows.size } };
     }
+    if (op === 'inbox' && method === 'GET') {
+      const from = Math.max(0, Number(after) || 0);
+      const rows = await s.list<{ blob: string; at: number }>({ prefix: 'i:', start: `i:${String(from + 1).padStart(12, '0')}`, limit: 200 });
+      return { status: 200, body: { notes: [...rows].map(([k, v]) => ({ seq: Number(k.slice(2)), blob: v.blob, at: v.at })) } };
+    }
+    if (op === 'inbox-ack' && method === 'POST') {
+      let upTo = 0;
+      try {
+        upTo = Number((JSON.parse(body) as { upTo?: unknown }).upTo) || 0;
+      } catch {
+        /* ignore */
+      }
+      const rows = await s.list({ prefix: 'i:', end: `i:${String(upTo + 1).padStart(12, '0')}` });
+      const keys = [...rows.keys()];
+      for (let i = 0; i < keys.length; i += 128) await s.delete(keys.slice(i, i + 128));
+      return { status: 200, body: { deleted: keys.length } };
+    }
     if (op === 'reset' && method === 'POST') {
       await s.deleteAll();
       return { status: 200, body: { ok: true } };
     }
     return { status: 405, body: { error: 'method not allowed' } };
+  }
+
+  /** Unauthenticated drop into the host inbox. Only a room that has an owner accepts notes. */
+  async drop(body: string): Promise<Result> {
+    const s = this.ctx.storage;
+    if (!(await s.get<string>('auth'))) return { status: 404, body: { error: 'no such inbox' } };
+    let blob: unknown;
+    try {
+      blob = (JSON.parse(body) as { blob?: unknown }).blob;
+    } catch {
+      /* fall through */
+    }
+    if (typeof blob !== 'string' || blob.length > MAX_NOTE || !/^[A-Za-z0-9_-]+$/.test(blob)) return { status: 400, body: { error: 'bad body' } };
+    const count = (await s.get<number>('notes')) ?? 0;
+    const waiting = await s.list({ prefix: 'i:', limit: MAX_NOTES });
+    if (waiting.size >= MAX_NOTES) return { status: 429, body: { error: 'inbox full, try again later' } };
+    const seq = count + 1;
+    await s.put({ notes: seq, [`i:${String(seq).padStart(12, '0')}`]: { blob, at: Date.now() } });
+    return { status: 200, body: { ok: true } };
   }
 
   private async prune(): Promise<void> {
