@@ -1,0 +1,13 @@
+{
+  "name": "group-digest-sync",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Links one WhatsApp account and forwards chosen groups to the Group Digest app, end-to-end encrypted.",
+  "main": "bridge.mjs",
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "baileys": "7.0.0-rc14",
+    "pino": "^9.6.0"
+  }
+}

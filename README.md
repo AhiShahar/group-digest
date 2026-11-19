@@ -73,9 +73,23 @@ The build uses relative paths, so any other HTTPS static host works too (build `
 
 Each person's data and key stay on their own device, so testers do not see each other's chats.
 
+## Live sync (linked device)
+
+Settings > **Live sync from WhatsApp** links WhatsApp once by QR code, like WhatsApp Web, and new messages from the groups you tick flow into the app on any phone, iPhone included. Unofficial: WhatsApp may restrict accounts that use it, so start with your own number.
+
+```
+WhatsApp <-> sync server (your VM) --encrypted--> relay (this Worker) --encrypted--> app
+```
+
+- **Sync server** (`public/bridge/`, Node + Baileys): links one account, keeps only the link on disk (`/var/lib/group-digest/auth`) so restarts reconnect, forwards messages from chosen groups only, holds message text in memory for seconds. Outgoing connections only, so no domain, tunnel or open port.
+- **Relay** (`worker/index.ts`): one SQLite Durable Object per pairing on the Workers free plan. Stores ciphertext only; batches are deleted once the app has them, or after 7 days.
+- **Encryption** (`src/lib/syncCrypto.ts`, `public/bridge/crypto.mjs`): the app makes a random room id and 256-bit secret; HMAC-SHA256 derives the relay token and an AES-256-GCM key. The secret is in the setup command and never reaches the relay.
+- **Hosting:** the app shows a ready-made setup for Oracle Cloud Always Free (free, incl. public IP), Google Cloud (e2-micro is free-tier but its public IPv4 is billed about $3.65/month), or any Linux machine: `curl -fsSL https://<app>/bridge/setup.sh | sudo bash -s -- <relay> <room> <secret>`. The service refreshes its code from the Worker on every restart.
+- Server logs: `sudo journalctl -u group-digest-sync -f` (no message text is logged).
+
 ## Not in this build
 
-Live WhatsApp linking (linked-device bridge), scheduled digests, push notifications from a server and Google Calendar direct insert need a server and are phase 2 in the design. Local notifications fire only when a long digest finishes while the app is in the background.
+Scheduled digests, push notifications from a server and Google Calendar direct insert are phase 2 in the design. Local notifications fire only when a long digest finishes while the app is in the background.
 
 ## Layout
 
@@ -89,4 +103,8 @@ src/lib/calendar.ts      .ics, Google and Outlook links
 src/lib/store.ts         IndexedDB storage, retention, share-target pickup
 src/sw.ts                service worker: offline cache, Android share target
 src/App.tsx              UI
+src/LiveSync.tsx         live sync settings (setup, QR, groups)
+src/lib/liveSync.ts      relay client, pull + decrypt + store
+worker/index.ts          Worker: static app + encrypted relay
+public/bridge/           sync server (bridge.mjs, parse.mjs, crypto.mjs, setup.sh)
 ```
