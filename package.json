@@ -1,7 +1,7 @@
 {
   "name": "group-digest",
   "private": true,
-  "version": "0.2.1",
+  "version": "0.2.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.10.0",
+    "@fontsource-variable/plus-jakarta-sans": "^5.3.0",
     "jszip": "^3.10.2",
     "qrcode": "^1.5.4",
     "react": "^19.3.1",

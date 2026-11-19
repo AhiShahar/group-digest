@@ -1,32 +1,58 @@
+/* Look: "Bubbly" - soft floating cards on a mint and peach glow, pill buttons, a colored dot per summary section. */
 :root {
-  --bg: #f4f6f5;
+  --bg: #eef7f3;
   --card: #ffffff;
-  --text: #15201c;
-  --muted: #5d6b66;
-  --line: #dde3e0;
-  --brand: #128c7e;
+  --text: #10241d;
+  --muted: #566b64;
+  --line: #e1ece7;
+  --brand: #0e9f7e;
+  --brand-2: #0b8f8a;
   --brand-ink: #ffffff;
-  --brand-soft: #e3f4f1;
+  --brand-soft: #d9f3ea;
+  --chip: #f0f5f3;
+  --glow-a: #d4f5e7;
+  --glow-b: #fde9c8;
+  --top: #eef7f3;
+  --shadow: rgba(16, 60, 45, 0.25);
+  --event: #f6faf8;
+  --due-bg: #fff1d6;
+  --due-ink: #8a5300;
+  --dot-2: #7c5cff;
+  --dot-3: #ff9f1c;
+  --dot-4: #ff5d8f;
   --danger: #b3261e;
   --warn: #9a6700;
-  --radius: 14px;
+  --radius: 22px;
   color-scheme: light dark;
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-family: 'Plus Jakarta Sans Variable', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   font-size: 16px;
   line-height: 1.45;
 }
 @media (prefers-color-scheme: dark) {
+  /* Dark mode uses the "Dusk" look: plum night, violet and coral glow, see-through cards. */
   :root {
-    --bg: #0f1115;
-    --card: #181c21;
-    --text: #e8ecea;
-    --muted: #98a5a0;
-    --line: #2a3036;
-    --brand: #25b39f;
-    --brand-ink: #06231f;
-    --brand-soft: #13302b;
+    --bg: #171329;
+    --card: rgba(255, 255, 255, 0.05);
+    --text: #eef0f8;
+    --muted: #9c99b3;
+    --line: rgba(255, 255, 255, 0.1);
+    --brand: #ff9b85;
+    --brand-2: #ff7f6b;
+    --brand-ink: #2a0f0a;
+    --brand-soft: rgba(255, 155, 133, 0.14);
+    --chip: rgba(255, 255, 255, 0.07);
+    --glow-a: rgba(150, 110, 255, 0.35);
+    --glow-b: rgba(255, 140, 120, 0.28);
+    --top: #171329;
+    --shadow: rgba(0, 0, 0, 0.5);
+    --event: rgba(255, 255, 255, 0.04);
+    --due-bg: rgba(150, 110, 255, 0.24);
+    --due-ink: #d2c9ff;
+    --dot-2: #a98bff;
+    --dot-3: #ffc66b;
+    --dot-4: #ff7fa8;
     --danger: #ff8a80;
-    --warn: #e3b341;
+    --warn: #ffc66b;
   }
 }
 * { box-sizing: border-box; }
@@ -125,3 +151,50 @@ button.link.inline { padding: 0; display: inline; font-size: inherit; }
 .steps { padding-left: 22px; margin: 8px 0; }
 .steps li { margin: 6px 0; }
 .share-icon { display: inline-block; border: 1.5px solid currentColor; border-radius: 5px; padding: 0 5px; font-size: 13px; line-height: 18px; }
+
+/* Bubbly look */
+body {
+  background:
+    radial-gradient(120% 50% at 0% 0%, var(--glow-a) 0%, transparent 60%),
+    radial-gradient(90% 40% at 100% 0%, var(--glow-b) 0%, transparent 55%),
+    var(--bg);
+  background-attachment: fixed;
+}
+.top { background: var(--top); border-bottom: 0; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+.brand { font-weight: 800; font-size: 19px; }
+.tab { background: var(--card); opacity: .85; }
+.tab.on { background: var(--text); color: var(--bg); opacity: 1; }
+h1 { font-size: 30px; font-weight: 800; letter-spacing: -.02em; }
+h2 { font-weight: 800; }
+.headline { font-size: 20px; font-weight: 800; letter-spacing: -.01em; }
+h3 { text-transform: none; letter-spacing: 0; font-size: 15px; color: var(--text); font-weight: 700; display: flex; align-items: center; gap: 8px; }
+h3::before { content: ''; width: 10px; height: 10px; border-radius: 50%; background: var(--brand); flex: none; }
+.digest h3:nth-of-type(2)::before { background: var(--dot-2); }
+.digest h3:nth-of-type(3)::before { background: var(--dot-3); }
+.digest h3:nth-of-type(4)::before { background: var(--dot-4); }
+.card { border: 0; box-shadow: 0 10px 30px -12px var(--shadow); padding: 18px 20px; }
+.onboard { border: 0; background: linear-gradient(160deg, var(--card) 0%, var(--brand-soft) 140%); }
+button, .btn { border-radius: 999px; border: 0; background: var(--chip); font-weight: 600; }
+button.primary { background: linear-gradient(135deg, var(--brand), var(--brand-2)); box-shadow: 0 8px 20px -8px var(--brand); }
+button.link { background: none; }
+input, select { border-radius: 14px; }
+.drop { border: 2px dashed var(--line); background: color-mix(in srgb, var(--card) 55%, transparent); }
+.drop.on { border-color: var(--brand); }
+.event { border: 0; background: var(--event); border-radius: 18px; }
+.event.low { border: 1px dashed var(--line); }
+.event .name { font-weight: 700; }
+.pill { background: var(--due-bg); color: var(--due-ink); font-weight: 600; }
+.avatar { background: linear-gradient(135deg, var(--brand), var(--dot-2)); color: #fff; border-radius: 16px; }
+.chats li button { border: 0; background: var(--card); box-shadow: 0 6px 18px -10px var(--shadow); }
+.prov { border-radius: 16px; }
+.banner { border-radius: 18px; }
+.banner.subtle { border: 0; box-shadow: 0 6px 18px -10px var(--shadow); }
+
+/* Dusk details for dark mode */
+@media (prefers-color-scheme: dark) {
+  .card, .chats li button { backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 10px 30px -14px var(--shadow); }
+  input, select { background: rgba(0, 0, 0, 0.25); }
+  .toast { background: #eef0f8; color: #171329; }
+  .onboard { box-shadow: 0 0 0 1px rgba(255, 155, 133, 0.3), 0 20px 50px -20px rgba(255, 155, 133, 0.35); }
+  .avatar { color: #1a0f2a; }
+}
