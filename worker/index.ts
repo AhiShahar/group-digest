@@ -19,8 +19,11 @@
 // first token it sees and refuses any other. Room ids are 128-bit random.
 
 import { DurableObject } from 'cloudflare:workers';
+import { handlePush, PushBox, type PushEnv } from './push';
 
-interface Env {
+export { PushBox };
+
+interface Env extends PushEnv {
   ASSETS: Fetcher;
   SYNC: DurableObjectNamespace<SyncRoom>;
 }
@@ -57,6 +60,8 @@ export default {
     const url = new URL(req.url);
     const m = /^\/api\/sync\/([a-f0-9]{32})\/(state|config|messages|ack|reset)$/.exec(url.pathname);
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(req);
+    const push = /^\/api\/push\/([a-z]+)$/.exec(url.pathname);
+    if (push) return handlePush(req, env, push[1]);
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
     if (!m) return json({ error: 'not found' }, 404);
     const token = /^Bearer ([A-Za-z0-9_-]{20,100})$/.exec(req.headers.get('authorization') ?? '')?.[1];

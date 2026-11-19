@@ -41,6 +41,24 @@ self.addEventListener('fetch', (event) => {
 });
 
 // Tapping a "digest ready" notification focuses the app.
+// Event reminders sent by the push server (worker/push.ts).
+self.addEventListener('push', (event) => {
+  let data: { title?: string; body?: string; tag?: string } = {};
+  try {
+    data = event.data?.json() ?? {};
+  } catch {
+    data = { body: event.data?.text() };
+  }
+  event.waitUntil(
+    self.registration.showNotification(data.title || 'Group Digest', {
+      body: data.body ?? '',
+      tag: data.tag,
+      icon: './pwa-192x192.png',
+      badge: './pwa-64x64.png',
+    }),
+  );
+});
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   event.waitUntil(

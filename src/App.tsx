@@ -9,6 +9,7 @@ import { parseChatText, readExportFile } from './lib/parser';
 import { PROVIDERS, providerInfo, type ProviderId } from './lib/providerInfo';
 import { rankModels } from './lib/models';
 import { DEFAULT_REMINDERS } from './lib/reminders';
+import { disablePush } from './lib/webpush';
 import { RemindAllButton, ReminderButton, ReminderSettings, RemindersContext, useReminderPrefs } from './Reminders';
 
 const providers = () => import('./lib/providers');
@@ -744,6 +745,7 @@ function EventRow({ e, chatName, onToast }: { e: DigestEvent; chatName: string; 
         <a className="btn" href={outlookCalendarUrl(e, chatName)} target="_blank" rel="noreferrer">
           Outlook
         </a>
+        <ReminderButton e={e} chatName={chatName} onToast={onToast} />
       </div>
     </li>
   );
@@ -886,6 +888,7 @@ function Settings({
   const wipe = async () => {
     if (!window.confirm('Delete all groups, digests and your AI key from this device?')) return;
     indexedDB.deleteDatabase('group-digest');
+    disablePush().catch(() => {});
     onToast('All data deleted.');
     setTimeout(() => location.reload(), 600);
     onWiped();
@@ -1008,6 +1011,7 @@ function Settings({
       <ReminderSettings
         prefs={settings.reminders ?? DEFAULT_REMINDERS}
         onChange={(r) => onChange({ ...settings, reminders: { ...r, repeat: r.repeat < r.lead ? r.repeat : 0 } })}
+        onToast={onToast}
       />
 
       <LiveSync onToast={onToast} onSynced={onWiped} />
@@ -1024,7 +1028,8 @@ function Settings({
         <p className="small">
           Chats, digests and keys live only on this device. The only network calls are to the AI provider you chose, with the
           messages you asked it to summarize (phone numbers are masked first). If you turn on live sync, your own sync server passes messages
-          from the groups you chose through this app's relay, end-to-end encrypted, and they are deleted from the relay once this device has them. Other group members have not agreed to AI processing, so consider
+          from the groups you chose through this app's relay, end-to-end encrypted, and they are deleted from the relay once this device has them.
+          If you turn on reminders on the website, only event titles and times go to this app's reminder service. Other group members have not agreed to AI processing, so consider
           telling your group.
         </p>
         <button className="danger" onClick={wipe}>

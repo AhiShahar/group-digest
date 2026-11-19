@@ -67,8 +67,8 @@ export interface ScheduledReminder {
 const fmtLead = (m: number) =>
   m % 1440 === 0 ? `${m / 1440} day${m === 1440 ? '' : 's'}` : m % 60 === 0 ? `${m / 60} hour${m === 60 ? '' : 's'}` : `${m} minutes`;
 
-/** Reminders still in the future for one event. */
-export function remindersFor(e: DigestEvent, chatName: string, p: ReminderPrefs, now = Date.now()): ScheduledReminder[] {
+/** Reminders still in the future for one event. `minimal` leaves the place and group name out of the text, for reminders sent through the push server. */
+export function remindersFor(e: DigestEvent, chatName: string, p: ReminderPrefs, now = Date.now(), minimal = false): ScheduledReminder[] {
   const base = reminderBase(e).getTime();
   const when = new Date(eventTimes(e).start).toLocaleString(undefined, {
     weekday: 'short',
@@ -81,7 +81,7 @@ export function remindersFor(e: DigestEvent, chatName: string, p: ReminderPrefs,
       id: `${eventKey(e, chatName)}#${m}`,
       at: base - m * 60_000,
       title: e.title,
-      body: `In ${fmtLead(m)}: ${when}${e.location ? ` · ${e.location}` : ''} (${chatName})`,
+      body: minimal ? `In ${fmtLead(m)}: ${when}` : `In ${fmtLead(m)}: ${when}${e.location ? ` · ${e.location}` : ''} (${chatName})`,
     }))
     .filter((r) => r.at > now);
 }
