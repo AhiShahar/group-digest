@@ -7,6 +7,7 @@ This is the phase 1 test build from the [design proposal](https://claude.ai/arti
 - **Import** a WhatsApp chat export (`.txt` or `.zip`, Android or iPhone, any common date format). Re-importing a newer export adds only the new messages.
 - **Summarize** with the AI the user picks: headline, key points, decisions, to-dos, open questions and possible events.
 - **Add events** to Google Calendar, Outlook, or Apple Calendar (`.ics`), one at a time or all at once. Nothing is added without a tap.
+- **Reminders** for each event, set in AI and settings (how far ahead, and how often to repeat). Calendar files (.ics) carry them as alarms, so they work on iPhone too; the Android app can also post its own notifications (Remind me). Google and Outlook links use the calendar's default reminder. The website cannot schedule notifications by itself; that would need a push server.
 - **Share** the summary back to WhatsApp or anywhere else.
 - **Android share-to-app:** after installing, WhatsApp > Export chat > Group Digest imports the chat directly.
 

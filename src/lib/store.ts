@@ -1,4 +1,5 @@
 import { LEGACY_DEFAULTS } from './models';
+import { DEFAULT_REMINDERS, type ReminderPrefs } from './reminders';
 // Everything is stored on this device only, in IndexedDB.
 import type { Digest } from './digest';
 import type { ChatMessage } from './parser';
@@ -28,6 +29,7 @@ export interface AppSettings extends ProviderSettings {
   language: string;
   retentionDays: number;
   notify: boolean;
+  reminders: ReminderPrefs;
 }
 
 const DB_NAME = 'group-digest';
@@ -107,6 +109,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   language: 'English',
   retentionDays: 30,
   notify: true,
+  reminders: DEFAULT_REMINDERS,
 };
 
 export async function loadSettings(): Promise<AppSettings> {

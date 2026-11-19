@@ -409,6 +409,37 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public void scheduleReminders(String json) {
+            ReminderReceiver.addAll(MainActivity.this, json);
+        }
+
+        @JavascriptInterface
+        public void cancelReminders(String idPrefix) {
+            ReminderReceiver.cancelPrefix(MainActivity.this, idPrefix);
+        }
+
+        @JavascriptInterface
+        public String reminderIds() {
+            return ReminderReceiver.futureIds(MainActivity.this);
+        }
+
+        @JavascriptInterface
+        public boolean notificationsAllowed() {
+            if (android.os.Build.VERSION.SDK_INT < 33) return true;
+            return checkSelfPermission("android.permission.POST_NOTIFICATIONS") == android.content.pm.PackageManager.PERMISSION_GRANTED;
+        }
+
+        @JavascriptInterface
+        public void askNotificationPermission() {
+            if (android.os.Build.VERSION.SDK_INT < 33) return;
+            runOnUiThread(new Runnable() {
+                public void run() {
+                    requestPermissions(new String[] { "android.permission.POST_NOTIFICATIONS" }, 33);
+                }
+            });
+        }
+
+        @JavascriptInterface
         public int androidVersion() {
             return android.os.Build.VERSION.SDK_INT;
         }

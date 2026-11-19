@@ -6,6 +6,8 @@ import { finishOpenRouterSignIn, startOpenRouterSignIn } from './lib/openrouter'
 import { parseChatText, readExportFile } from './lib/parser';
 import { PROVIDERS, providerInfo, type ProviderId } from './lib/providerInfo';
 import { rankModels } from './lib/models';
+import { DEFAULT_REMINDERS } from './lib/reminders';
+import { RemindAllButton, ReminderButton, ReminderSettings, RemindersContext, useReminderPrefs } from './Reminders';
 
 const providers = () => import('./lib/providers');
 import {
@@ -202,6 +204,7 @@ export default function App() {
   const needsSetup = loaded && providerInfo(settings.provider).needsKey && !settings.apiKey;
 
   return (
+    <RemindersContext.Provider value={settings.reminders ?? DEFAULT_REMINDERS}>
     <div className="app">
       <header className="top">
         <button className="brand" onClick={() => setView({ name: 'chats' })}>
@@ -269,6 +272,7 @@ export default function App() {
         </div>
       )}
     </div>
+    </RemindersContext.Provider>
   );
 }
 
@@ -588,6 +592,7 @@ function ErrorBox({ message }: { message: string }) {
 
 function DigestCard({ rec, chatName, open, onToast }: { rec: StoredDigest; chatName: string; open: boolean; onToast: (s: string) => void }) {
   const d = rec.digest;
+  const prefs = useReminderPrefs();
   const share = async () => {
     const text = digestAsText(chatName, d);
     try {
@@ -603,7 +608,7 @@ function DigestCard({ rec, chatName, open, onToast }: { rec: StoredDigest; chatN
   };
   const allIcs = async () => {
     const name = `${safeFilename(chatName)}-events.ics`;
-    const ics = await buildIcs(d.events, chatName);
+    const ics = await buildIcs(d.events, chatName, prefs);
     if (bridge) bridge.shareFile(name, 'text/calendar', ics);
     else downloadFile(name, ics, 'text/calendar');
   };
@@ -639,12 +644,13 @@ function DigestCard({ rec, chatName, open, onToast }: { rec: StoredDigest; chatN
           <h3>Possible events ({d.events.length})</h3>
           <ul className="events">
             {d.events.map((e, i) => (
-              <EventRow key={i} e={e} chatName={chatName} />
+              <EventRow key={i} e={e} chatName={chatName} onToast={onToast} />
             ))}
           </ul>
-          {d.events.length > 1 && (
-            <button onClick={allIcs}>Add all {d.events.length} to calendar (.ics)</button>
-          )}
+          <div className="row">
+            {d.events.length > 1 && <button onClick={allIcs}>Add all {d.events.length} to calendar (.ics)</button>}
+            <RemindAllButton events={d.events} chatName={chatName} onToast={onToast} />
+          </div>
         </>
       )}
       <div className="row foot">
@@ -671,20 +677,22 @@ function List({ title, items }: { title: string; items: string[] }) {
   );
 }
 
-function EventRow({ e, chatName }: { e: DigestEvent; chatName: string }) {
+function EventRow({ e, chatName, onToast }: { e: DigestEvent; chatName: string; onToast: (s: string) => void }) {
+  const prefs = useReminderPrefs();
   const when = new Date(`${e.date}T${e.start_time ?? '00:00'}:00`).toLocaleString(undefined, {
     weekday: 'short',
     day: 'numeric',
     month: 'short',
     ...(e.start_time ? { hour: '2-digit', minute: '2-digit' } : {}),
   });
-  const ics = async () => downloadFile(`${safeFilename(e.title)}.ics`, await buildIcs([e], chatName), 'text/calendar');
+  const ics = async () => downloadFile(`${safeFilename(e.title)}.ics`, await buildIcs([e], chatName, prefs), 'text/calendar');
   if (isAndroidApp) {
     return (
       <li className={`event ${e.confidence}`}>
         <EventInfo e={e} when={when} />
         <div className="event-actions">
           <button onClick={() => addEventNative(e, chatName)}>Add to calendar</button>
+          <ReminderButton e={e} chatName={chatName} onToast={onToast} />
         </div>
       </li>
     );
@@ -962,6 +970,11 @@ function Settings({
           <span className="muted small">Notifies you when a long digest finishes in the background.</span>
         </div>}
       </div>
+
+      <ReminderSettings
+        prefs={settings.reminders ?? DEFAULT_REMINDERS}
+        onChange={(r) => onChange({ ...settings, reminders: { ...r, repeat: r.repeat < r.lead ? r.repeat : 0 } })}
+      />
 
       {canCapture && <LiveCapture chats={chats} />}
       {isAndroidApp && !canCapture && (

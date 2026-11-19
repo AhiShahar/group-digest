@@ -17,6 +17,12 @@ interface AndroidBridge {
   openCaptureSettings?(): void;
   openAppInfo?(): void;
   androidVersion?(): number;
+  // Event reminders as phone notifications
+  scheduleReminders?(json: string): void; // ScheduledReminder[]
+  cancelReminders?(idPrefix: string): void;
+  reminderIds?(): string; // JSON string[] of future reminders
+  notificationsAllowed?(): boolean;
+  askNotificationPermission?(): void;
 }
 
 export interface CaptureStatus {
@@ -93,4 +99,16 @@ export function routeExternalLinks(): void {
     },
     true,
   );
+}
+
+/** True in the Android app builds that can post reminder notifications. */
+export const canRemind = !!bridge?.scheduleReminders;
+
+export function reminderIds(): string[] {
+  if (!bridge?.reminderIds) return [];
+  try {
+    return JSON.parse(bridge.reminderIds()) as string[];
+  } catch {
+    return [];
+  }
 }
