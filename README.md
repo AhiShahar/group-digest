@@ -53,10 +53,15 @@ Sample exports for trying it out are in `samples/`.
 
 ## Deploy for testers
 
-The build is static files with relative paths, so any HTTPS static host works (HTTPS is required for install and the service worker).
+Hosted on Cloudflare Workers static assets (free). `wrangler.jsonc` points at `dist/`.
 
-- **GitHub Pages:** push to `main`; `.github/workflows/deploy.yml` tests, builds and deploys. In the repo, set Settings > Pages > Source to "GitHub Actions" once.
-- **Netlify / Cloudflare Pages / Vercel:** build command `npm run build`, output directory `dist`. Or drag the `dist` folder onto Netlify Drop.
+- In Cloudflare: Workers & Pages > Create > Import a repository > pick this repo.
+- Build command: `npm run build`
+- Deploy command: `npx wrangler deploy`
+- Path: `/`
+- Every push to `main` redeploys. The app lives at `https://group-digest.<your-subdomain>.workers.dev`.
+
+The build uses relative paths, so any other HTTPS static host works too (build `npm run build`, output `dist`).
 
 ## Installing (testers)
 
