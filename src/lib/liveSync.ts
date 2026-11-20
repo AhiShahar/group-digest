@@ -36,6 +36,8 @@ export interface SyncPairing {
   /** member only: who invited them, and a request to leave. */
   hostName?: string;
   leave?: boolean;
+  /** member only: what the server's owner may see about this person. */
+  share?: { status: boolean };
   /** Scheduled digests made by the sync server with this person's own AI. */
   digest?: DigestSchedule;
   /** false turns off the daily backup of this device's data to the relay. */
@@ -90,9 +92,13 @@ export interface Member {
   name: string | null;
   code: string | null;
   joinedAt: number;
-  status: BridgeState['status'];
+  status: BridgeState['status'] | 'hidden';
   lastMessageAt: number;
 }
+
+/** Invites work for a week; the server refuses older ones. */
+export const INVITE_DAYS = 7;
+export const inviteExpired = (i: Invite, now = Date.now()) => now - i.createdAt > INVITE_DAYS * 864e5;
 
 export interface SyncGroup {
   id: string;
@@ -182,7 +188,7 @@ export async function pushConfig(p: SyncPairing): Promise<void> {
   const digest = await digestConfig(p);
   const config =
     p.role === 'member'
-      ? { v: 2, groups: p.groups, linkRequestedAt: p.linkRequestedAt, unlink: p.unlink, pairPhone: p.pairPhone, pairAt: p.pairAt, leave: !!p.leave, digest }
+      ? { v: 2, groups: p.groups, linkRequestedAt: p.linkRequestedAt, unlink: p.unlink, pairPhone: p.pairPhone, pairAt: p.pairAt, leave: !!p.leave, digest, share: p.share ?? { status: true } }
       : {
           v: 2,
           groups: p.groups,

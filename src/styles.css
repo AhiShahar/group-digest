@@ -232,3 +232,6 @@ ul.card.plain { list-style: none; padding: 8px 14px; }
 ul.card.plain li { padding: 6px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 ul.card.plain li:last-child { border-bottom: 0; }
 ul.card.plain .check { align-items: flex-start; padding: 2px 0; }
+.btn.primary { background: linear-gradient(135deg, var(--brand), var(--brand-2)); color: var(--brand-ink); box-shadow: 0 8px 20px -8px var(--brand); }
+ol.steps { margin: 8px 0; padding-left: 22px; }
+ol.steps li { padding: 2px 0; }
