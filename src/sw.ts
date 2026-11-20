@@ -1,5 +1,6 @@
 /// <reference lib="webworker" />
 import { cleanupOutdatedCaches, precacheAndRoute } from 'workbox-precaching';
+import { deriveKeys, open } from './lib/syncCrypto';
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -40,23 +41,57 @@ self.addEventListener('fetch', (event) => {
   );
 });
 
-// Tapping a "digest ready" notification focuses the app.
-// Event reminders sent by the push server (worker/push.ts).
+// Event reminders sent by the push server (worker/push.ts), and live-sync
+// notices (scheduled digest ready, server alerts). A notice from the sync
+// server arrives sealed; open it with the room key kept in IndexedDB, so the
+// relay never sees what it says.
+type PushData = { title?: string; body?: string; tag?: string; room?: string; sealed?: string };
+
+function readPairing(): Promise<{ room: string; secret: string } | undefined> {
+  return new Promise((resolve) => {
+    const req = indexedDB.open('group-digest');
+    req.onerror = () => resolve(undefined);
+    req.onsuccess = () => {
+      try {
+        const get = req.result.transaction('kv').objectStore('kv').get('liveSync');
+        get.onsuccess = () => resolve(get.result as { room: string; secret: string } | undefined);
+        get.onerror = () => resolve(undefined);
+      } catch {
+        resolve(undefined);
+      }
+    };
+  });
+}
+
+async function showPush(data: PushData) {
+  let { title, body } = data;
+  if (data.sealed) {
+    const p = await readPairing();
+    try {
+      if (!p || p.room !== data.room) throw new Error('not ours');
+      const n = await open<{ title: string; body: string }>(await deriveKeys(p.room, p.secret), 'notice', data.sealed);
+      ({ title, body } = n);
+    } catch {
+      title = 'Group Digest';
+      body = 'Something new from your sync server. Open the app to see it.';
+    }
+  }
+  await self.registration.showNotification(title || 'Group Digest', {
+    body: body ?? '',
+    tag: data.tag,
+    icon: './pwa-192x192.png',
+    badge: './pwa-64x64.png',
+  });
+}
+
 self.addEventListener('push', (event) => {
-  let data: { title?: string; body?: string; tag?: string } = {};
+  let data: PushData = {};
   try {
     data = event.data?.json() ?? {};
   } catch {
     data = { body: event.data?.text() };
   }
-  event.waitUntil(
-    self.registration.showNotification(data.title || 'Group Digest', {
-      body: data.body ?? '',
-      tag: data.tag,
-      icon: './pwa-192x192.png',
-      badge: './pwa-64x64.png',
-    }),
-  );
+  event.waitUntil(showPush(data));
 });
 
 self.addEventListener('notificationclick', (event) => {

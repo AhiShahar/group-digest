@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { buildIcs, downloadFile, googleCalendarUrl, outlookCalendarUrl, safeFilename } from './lib/calendar';
 import type { Digest, DigestEvent } from './lib/digest';
 import LiveSync from './LiveSync';
-import { loadPairing, pullMessages } from './lib/liveSync';
+import { lastDigests, loadPairing, pullMessages, pushConfig, savePairing } from './lib/liveSync';
 import { addEventNative, bridge, canCapture, captureStatus, isAndroidApp, peekCaptured, takeNativeShare, type CaptureStatus } from './lib/android';
 import { finishOpenRouterSignIn, startOpenRouterSignIn } from './lib/openrouter';
 import { parseChatText, readExportFile } from './lib/parser';
@@ -218,9 +218,13 @@ export default function App() {
         const p = await loadPairing();
         if (p?.groups.length) {
           const added = await pullMessages(p);
-          if (added) {
+          if (added || lastDigests) {
             await refreshChats();
-            setToast(`Synced ${added} new message${added === 1 ? '' : 's'} from WhatsApp.`);
+            setToast(
+              lastDigests
+                ? `${lastDigests} new scheduled digest${lastDigests === 1 ? '' : 's'} arrived. Open a group to read it.`
+                : `Synced ${added} new message${added === 1 ? '' : 's'} from WhatsApp.`,
+            );
           }
         }
       } catch {
@@ -240,8 +244,23 @@ export default function App() {
   }, [loaded, refreshChats]);
 
   const updateSettings = async (s: AppSettings) => {
+    const before = settings;
     setSettings(s);
     await saveSettings(s);
+    // Scheduled digests run on the sync server with these AI settings: send it the new ones.
+    if (before.provider !== s.provider || before.apiKey !== s.apiKey || before.model !== s.model || before.baseUrl !== s.baseUrl || before.language !== s.language) {
+      const p = await loadPairing();
+      if (p?.digest?.on) {
+        try {
+          const { pickModels } = await import('./lib/schedule');
+          const next = { ...p, digest: { ...p.digest, models: await pickModels(s) } };
+          await savePairing(next);
+          await pushConfig(next);
+        } catch {
+          /* the next change or app start sends it */
+        }
+      }
+    }
   };
 
   const needsSetup = loaded && providerInfo(settings.provider).needsKey && !settings.apiKey;
@@ -1041,7 +1060,7 @@ function Settings({
         onToast={onToast}
       />
 
-      <LiveSync onToast={onToast} onSynced={onWiped} />
+      <LiveSync settings={settings} onToast={onToast} onSynced={onWiped} />
 
       {canCapture && <LiveCapture chats={chats} />}
       {isAndroidApp && !canCapture && (
@@ -1056,6 +1075,8 @@ function Settings({
           Chats, digests and keys live only on this device. The only network calls are to the AI provider you chose, with the
           messages you asked it to summarize (phone numbers are masked first). If you turn on live sync, your own sync server passes messages
           from the groups you chose through this app's relay, end-to-end encrypted, and they are deleted from the relay once this device has them.
+          With scheduled digests on, your sync server keeps those groups' messages (encrypted, up to nine days) and sends them to your AI
+          at the time you picked, using the AI key from this device.
           If you turn on reminders on the website, only event titles and times go to this app's reminder service. Other group members have not agreed to AI processing, so consider
           telling your group.
         </p>

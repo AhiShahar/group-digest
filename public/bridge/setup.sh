@@ -65,7 +65,9 @@ cat > "$APP/update.sh" <<UPD
 #!/bin/bash
 set -e
 cd "$APP"
-for f in bridge.mjs crypto.mjs parse.mjs package.json; do
+FILES=\$(curl -fsSL "$RELAY/bridge/files.txt" 2>/dev/null | tr -cd 'a-z0-9.\\n-' || true)
+[ -n "\$FILES" ] || FILES="bridge.mjs crypto.mjs parse.mjs package.json"
+for f in \$FILES; do
   curl -fsSL "$RELAY/bridge/\$f" -o "\$f.new" && mv "\$f.new" "\$f"
 done
 if ! cmp -s package.json .installed-package.json || [ ! -d node_modules ]; then
