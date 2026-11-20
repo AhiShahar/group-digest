@@ -1,4 +1,6 @@
-# Group Digest
+# Nutshell
+
+_Formerly Group Digest. Internal ids (package name, database, worker URL) keep the old name so existing installs and data carry over._
 
 Summarize WhatsApp group chats and turn the plans in them into calendar events, using **your own AI**.
 
@@ -10,7 +12,7 @@ This is the phase 1 test build from the [design proposal](https://claude.ai/arti
 - **Reminders** for each event, set in AI and settings (how far ahead, and how often to repeat). Calendar files (.ics) carry them as alarms, so they work on iPhone too; the Android app can also post its own notifications (Remind me). Google and Outlook links use the calendar's default reminder. On the website, Remind me uses Web Push through this site's Worker (`worker/push.ts`): only the event title and time are sent, one Durable Object per browser wakes itself when a reminder is due, and the VAPID keys are created automatically on first use. iPhone needs the app on the Home Screen (iOS 16.4+).
 - **Ask across groups** (Ask tab): instant search over every stored group (Hebrew prefixes match too), "Ask the AI" with answers and sources (only messages matching the question's words, plus a little context, go to the AI), and an overview of upcoming dates, open to-dos (tick them off) and recent decisions from the last three weeks of digests.
 - **Share** the summary back to WhatsApp or anywhere else.
-- **Android share-to-app:** after installing, WhatsApp > Export chat > Group Digest imports the chat directly.
+- **Android share-to-app:** after installing, WhatsApp > Export chat > Nutshell imports the chat directly.
 
 There is no backend. Chats, digests and keys are stored in the browser's IndexedDB on that device. The only network calls go to the AI provider the user chose. Phone numbers are masked before sending.
 
@@ -69,7 +71,7 @@ The build uses relative paths, so any other HTTPS static host works too (build `
 
 1. Open the app link.
 2. **iPhone / iPad (Safari):** Share > Add to Home Screen. Export chats with WhatsApp > group > Export chat > Without media > Save to Files, then import the zip in the app.
-3. **Android (Chrome):** tap Install when prompted, or menu > Install app. Then WhatsApp > group > Export chat > Without media > Group Digest.
+3. **Android (Chrome):** tap Install when prompted, or menu > Install app. Then WhatsApp > group > Export chat > Without media > Nutshell.
 4. **Desktop (Chrome, Edge):** install icon in the address bar. Drag an export onto the page.
 5. Open **AI and settings**, choose a provider, paste a key (or sign in with OpenRouter), tap **Check connection**.
 

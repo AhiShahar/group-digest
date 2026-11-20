@@ -196,7 +196,7 @@ export async function callAi(ai, model, system, user, { referer = '', fetchImpl 
     ai.provider === 'openai' ? 'https://api.openai.com/v1' : ai.provider === 'openrouter' ? 'https://openrouter.ai/api/v1' : String(ai.baseUrl || '').replace(/\/+$/, '');
   const headers = { 'content-type': 'application/json' };
   if (ai.apiKey) headers.authorization = `Bearer ${ai.apiKey}`;
-  if (ai.provider === 'openrouter') Object.assign(headers, { 'HTTP-Referer': referer, 'X-Title': 'Group Digest' });
+  if (ai.provider === 'openrouter') Object.assign(headers, { 'HTTP-Referer': referer, 'X-Title': 'Nutshell' });
   const body = { model, messages: [{ role: 'system', content: `${system}\n\n${SCHEMA_HINT}` }, { role: 'user', content: user }], response_format: { type: 'json_object' } };
   let res = await fetchImpl(`${base}/chat/completions`, { method: 'POST', headers, body: JSON.stringify(body), signal: timeout });
   if (res.status === 400) {

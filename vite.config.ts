@@ -20,8 +20,8 @@ export default defineConfig({
       injectRegister: 'auto',
       includeAssets: ['favicon.svg', 'apple-touch-icon-180x180.png'],
       manifest: {
-        name: 'Group Digest',
-        short_name: 'Digest',
+        name: 'Nutshell',
+        short_name: 'Nutshell',
         description: 'Summarize WhatsApp group chats and pull out calendar events, with your own AI.',
         start_url: './',
         scope: './',

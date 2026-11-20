@@ -42,7 +42,7 @@ export function ExportSteps({ group }: { group?: string }) {
       <ol className="steps">
         {start}
         <li>
-          In the share sheet, tap <b>Group Digest</b>. It opens here with the new messages added.
+          In the share sheet, tap <b>Nutshell</b>. It opens here with the new messages added.
         </li>
       </ol>
     );
@@ -52,7 +52,7 @@ export function ExportSteps({ group }: { group?: string }) {
       <ol className="steps">
         {start}
         <li>
-          Tap <b>Group Digest</b> in the share sheet. It appears there once you install this app (Chrome menu ⋮ &gt; <b>Install app</b>).
+          Tap <b>Nutshell</b> in the share sheet. It appears there once you install this app (Chrome menu ⋮ &gt; <b>Install app</b>).
           Without installing, save the file and tap <b>Import chat export</b> here.
         </li>
       </ol>

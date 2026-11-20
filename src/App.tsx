@@ -64,7 +64,7 @@ function shouldShowIosInstall(): boolean {
 function IosInstallCard({ onDismiss }: { onDismiss: () => void }) {
   return (
     <div className="card onboard ios">
-      <h2>First, add Group Digest to your Home Screen</h2>
+      <h2>First, add Nutshell to your Home Screen</h2>
       <ol className="steps">
         <li>
           Tap the <b>Share</b> button <span className="share-icon" aria-hidden="true">⬆︎</span> in Safari's toolbar.
@@ -306,7 +306,7 @@ export default function App() {
       <header className="top">
         <button className="brand" onClick={() => setView({ name: 'chats' })}>
           <img src="./favicon.svg" alt="" width={28} height={28} />
-          <span>Group Digest</span>
+          <span>Nutshell</span>
         </button>
         <nav>
           <button className={view.name === 'chats' || view.name === 'chat' ? 'tab on' : 'tab'} onClick={() => setView({ name: 'chats' })}>
@@ -349,7 +349,7 @@ export default function App() {
         {iosInstall && <IosInstallCard onDismiss={() => setIosInstall(false)} />}
         {installEvt && (
           <div className="banner subtle">
-            <span>Install Group Digest on this device for quick access and share-to-app.</span>
+            <span>Install Nutshell on this device for quick access and share-to-app.</span>
             <button
               onClick={async () => {
                 await installEvt.prompt();
@@ -914,7 +914,7 @@ function LiveCapture({ chats }: { chats: StoredChat[] }) {
       <h2 id="capture">Save messages automatically</h2>
       <div className="card">
         <p className="small">
-          With your permission, Group Digest reads WhatsApp notifications and saves messages from the groups you tick below. They stay on this
+          With your permission, Nutshell reads WhatsApp notifications and saves messages from the groups you tick below. They stay on this
           phone and show up in summaries next to your exports. Private chats and unticked groups are never saved.
         </p>
         <p className="small muted">
@@ -930,7 +930,7 @@ function LiveCapture({ chats }: { chats: StoredChat[] }) {
                 Allow notification access
               </button>
             </div>
-            <p className="small muted">Find Group Digest in the list and turn it on, then come back.</p>
+            <p className="small muted">Find Nutshell in the list and turn it on, then come back.</p>
             {restricted && (
               <p className="small muted">
                 If Android says the setting is restricted: open{' '}
@@ -1142,7 +1142,7 @@ function Settings({
       {canCapture && <LiveCapture chats={chats} />}
       {isAndroidApp && !canCapture && (
         <p className="muted small">
-          This is the lite version. To save WhatsApp messages automatically instead of exporting, install the full version of Group Digest.
+          This is the lite version. To save WhatsApp messages automatically instead of exporting, install the full version of Nutshell.
         </p>
       )}
 
@@ -1162,7 +1162,7 @@ function Settings({
           Delete all data on this device
         </button>
       </div>
-      <p className="muted small center">Group Digest test build · not affiliated with WhatsApp or Meta</p>
+      <p className="muted small center">Nutshell test build · not affiliated with WhatsApp or Meta</p>
     </section>
   );
 }

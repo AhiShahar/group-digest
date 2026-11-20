@@ -36,7 +36,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Hosts the Group Digest web app in a WebView. The bundled files in assets/www are
+ * Hosts the Nutshell web app in a WebView. The bundled files in assets/www are
  * served from https://appassets.androidplatform.net (a domain reserved for this),
  * so the page gets a normal secure origin: IndexedDB, crypto and CORS calls to the
  * AI providers all work as they do in a browser.
@@ -176,7 +176,7 @@ public class MainActivity extends Activity {
         handleIntent(intent);
     }
 
-    /** WhatsApp > Export chat > Group Digest arrives here as ACTION_SEND. */
+    /** WhatsApp > Export chat > Nutshell arrives here as ACTION_SEND. */
     private void handleIntent(Intent intent) {
         if (intent == null) return;
         String action = intent.getAction();

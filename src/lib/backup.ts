@@ -1,4 +1,4 @@
-// Automatic backups of this device's Group Digest data (groups, messages,
+// Automatic backups of this device's Nutshell data (groups, messages,
 // digests, settings, live-sync pairing) to the live-sync relay, sealed with
 // the pairing key, so a lost or reset phone can get everything back with the
 // recovery key. Needs live sync, because the relay room and key come from it.

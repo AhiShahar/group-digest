@@ -1,4 +1,4 @@
-// Group Digest sync server.
+// Nutshell sync server.
 //
 // Links WhatsApp accounts as linked devices (like WhatsApp Web) and forwards
 // new messages from the groups each person chose in the app. One server can
@@ -675,7 +675,7 @@ async function main() {
             this.downAlerted = false;
             this.notice('Connected to WhatsApp again', 'Live sync is working again.', 'health');
           } else if (wasNew && this.linkRequestedAt && Date.now() - Math.max(this.linkRequestedAt, this.pairAt) < LINK_WINDOW_MS) {
-            this.notice('WhatsApp linked', 'Your sync server is linked. Pick the groups to sync in Group Digest.', 'health');
+            this.notice('WhatsApp linked', 'Your sync server is linked. Pick the groups to sync in Nutshell.', 'health');
           }
           this.pairPhone = null;
           this.setState({ status: 'connected', qr: null, code: null, me, error: null });
@@ -690,7 +690,7 @@ async function main() {
             this.downSince = 0;
             this.notice(
               'WhatsApp unlinked your sync server',
-              'Live sync stopped: the linked device was logged out, from your phone or by WhatsApp. Open Group Digest, Live sync, to link again.',
+              'Live sync stopped: the linked device was logged out, from your phone or by WhatsApp. Open Nutshell, Live sync, to link again.',
               'unlinked',
             );
             rmSync(this.authDir, { recursive: true, force: true });
@@ -930,7 +930,7 @@ async function main() {
 
   // ---- start --------------------------------------------------------------------------------
 
-  log(`Group Digest sync ${VERSION} starting, relay ${cfg.relay}, room for ${MAX_USERS} friends`);
+  log(`Nutshell sync ${VERSION} starting, relay ${cfg.relay}, room for ${MAX_USERS} friends`);
   const ownerKeys = await deriveKeys(cfg.room, cfg.secret);
   const ownerCall = (method, op, body, query = '') => relay(ownerKeys, method, op, body, query);
 

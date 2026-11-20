@@ -1,4 +1,4 @@
-// Web push reminders for the website version of Group Digest.
+// Web push reminders for the website version of Nutshell.
 //
 // The app subscribes to push in the browser and sends its reminders here:
 // only the event title, a short "when" line and the times to remind. No chat
@@ -190,7 +190,7 @@ export class PushBox extends DurableObject<PushEnv> {
 
   async test(sub: Sub, origin: string): Promise<{ ok: boolean; status?: number }> {
     if (!(await this.allowed(sub))) return { ok: false };
-    const status = await this.send({ sub, origin }, { id: 'test', at: Date.now(), title: 'Group Digest', body: 'Notifications are on. Reminders will look like this.' });
+    const status = await this.send({ sub, origin }, { id: 'test', at: Date.now(), title: 'Nutshell', body: 'Notifications are on. Reminders will look like this.' });
     return { ok: status >= 200 && status < 300, status };
   }
 

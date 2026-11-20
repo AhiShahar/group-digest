@@ -88,7 +88,7 @@ export async function currentSubscription(): Promise<PushSubscription | null> {
 
 /** Ask for permission (call from a tap) and subscribe. */
 export async function enablePush(): Promise<PushSubscription> {
-  if (!pushSupported()) throw new Error(pushNeedsHomeScreen() ? 'Add Group Digest to your Home Screen first.' : 'This browser cannot show reminders.');
+  if (!pushSupported()) throw new Error(pushNeedsHomeScreen() ? 'Add Nutshell to your Home Screen first.' : 'This browser cannot show reminders.');
   const perm = await Notification.requestPermission();
   if (perm !== 'granted') throw new Error('Notifications are blocked. Allow them for this site in your browser settings.');
   const reg = await navigator.serviceWorker.ready;

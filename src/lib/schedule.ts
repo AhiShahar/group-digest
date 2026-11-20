@@ -22,7 +22,7 @@ export const noticesSupported = () => pushSupported() || !!bridge?.setNoticeWatc
 /** Turn on notices for this room on this phone (Web Push, or the Android app's background check). */
 export async function turnOnNotices(p: SyncPairing, onUpdate: (p: SyncPairing) => Promise<void>): Promise<string> {
   if (isAndroidApp) {
-    if (!bridge?.setNoticeWatch) throw new Error('Update the Group Digest app to get alerts.');
+    if (!bridge?.setNoticeWatch) throw new Error('Update the Nutshell app to get alerts.');
     bridge.askNotificationPermission?.();
     const seen = await fetchNotices(p).catch(() => [] as SyncNotice[]);
     bridge.setNoticeWatch(JSON.stringify({ relay: p.relay, room: p.room, secret: p.secret, after: Math.max(0, ...seen.map((n) => n.seq)) }));
