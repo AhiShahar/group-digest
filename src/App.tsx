@@ -16,6 +16,7 @@ import { findMatchingChat } from './lib/match';
 import { ExportSteps, OpenWhatsApp, UpdateNudge } from './ExportHelp';
 import { DEFAULT_REMINDERS } from './lib/reminders';
 import { disablePush } from './lib/webpush';
+import { splitActive } from './lib/active';
 import { RemindAllButton, ReminderButton, ReminderSettings, RemindersContext, useReminderPrefs } from './Reminders';
 
 const providers = () => import('./lib/providers');
@@ -435,6 +436,12 @@ function CaptureHint({ onOpen }: { onOpen: () => void }) {
 function ChatList({ chats, onImport, onOpen }: { chats: StoredChat[]; onImport: (f: File[]) => void; onOpen: (id: string) => void }) {
   const input = useRef<HTMLInputElement>(null);
   const [drag, setDrag] = useState(false);
+  const [showQuiet, setShowQuiet] = useState(false);
+  const lastOf = (c: StoredChat) => c.messages[c.messages.length - 1]?.ts ?? 0;
+  // Most recently active first; groups quiet for a month wait behind a button.
+  const sorted = [...chats].sort((a, b) => lastOf(b) - lastOf(a) || b.importedAt - a.importedAt);
+  const split = splitActive(sorted, lastOf);
+  const list = showQuiet ? sorted : split.shown;
   return (
     <section>
       <div
@@ -487,7 +494,7 @@ function ChatList({ chats, onImport, onOpen }: { chats: StoredChat[]; onImport: 
 
       {chats.length > 0 && <h2 className="list-title">Your groups</h2>}
       <ul className="chats">
-        {chats.map((c) => {
+        {list.map((c) => {
           const first = c.messages[0]?.ts;
           const last = c.messages[c.messages.length - 1]?.ts;
           return (
@@ -506,6 +513,14 @@ function ChatList({ chats, onImport, onOpen }: { chats: StoredChat[]; onImport: 
           );
         })}
       </ul>
+      {split.hidden.length > 0 && (
+        <p className="small muted">
+          {showQuiet ? '' : `${split.hidden.length} group${split.hidden.length === 1 ? '' : 's'} with no messages in the last month ${split.hidden.length === 1 ? 'is' : 'are'} hidden. `}
+          <button className="link inline small" onClick={() => setShowQuiet(!showQuiet)}>
+            {showQuiet ? 'Hide quiet groups' : `Show ${split.hidden.length === 1 ? 'it' : 'them'}`}
+          </button>
+        </p>
+      )}
     </section>
   );
 }
