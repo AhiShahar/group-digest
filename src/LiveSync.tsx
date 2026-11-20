@@ -605,6 +605,13 @@ export default function LiveSync({ settings, onToast, onSynced }: { settings: Ap
               </>
             )}
 
+            {st?.status === 'connected' && st.hygiene?.readOnly && (
+              <p className="small muted">
+                Low-risk mode: the server only reads. It never sends messages, marks chats as read or shows you online, and it keeps its
+                requests to WhatsApp few.
+                {st.hygiene.reconnectsLastHour >= 3 ? ` It reconnected ${st.hygiene.reconnectsLastHour} times in the last hour, so it is waiting longer between tries.` : ''}
+              </p>
+            )}
             {st?.status === 'connected' && p.groups.length > 0 && <Scheduled p={p} st={st} settings={settings} onUpdate={update} onToast={onToast} />}
             {st && st.status !== 'removed' && <RecentNotices p={p} />}
 

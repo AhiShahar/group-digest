@@ -35,7 +35,7 @@ import makeWASocket, { Browsers, DisconnectReason, fetchLatestBaileysVersion, us
 import { deriveKeys, hostInbox, importHostKey, newHostKey, open, openSealed, seal } from './crypto.mjs';
 import { toRecord } from './parse.mjs';
 
-const VERSION = '0.4.3';
+const VERSION = '0.5.0';
 const SELF = fileURLToPath(import.meta.url);
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 
@@ -63,7 +63,7 @@ async function serverFiles() {
   } catch {
     /* offline: use what is here */
   }
-  return [...BASE_FILES, 'digest.mjs', 'backup.mjs'];
+  return [...BASE_FILES, 'digest.mjs', 'backup.mjs', 'hygiene.mjs'];
 }
 async function loadModule(name) {
   const here = join(SELF, '..');
@@ -116,12 +116,15 @@ if (!process.env.GD_CHILD && getHeapStatistics().heap_size_limit / 2 ** 20 < wan
 async function main() {
   const { duePeriod, friendlyAiError, summarizeGroup } = await loadModule('digest.mjs');
   const backup = await loadModule('backup.mjs');
+  const { Limiter, jitter, makeReadOnly, reconnectDelay } = await loadModule('hygiene.mjs');
   const DATA = process.env.GD_DATA || '/var/lib/group-digest';
   const LINK_WINDOW_MS = 10 * 60e3; // show QR codes for 10 minutes after the app asks
   const HISTORY_KEEP_MS = 60 * 60e3; // recent history from linking, kept in memory for an hour
   const HISTORY_MAX = 3000;
   const INVITE_DAYS = 7;
-  const MAX_USERS = Number(process.env.GD_MAX_USERS) || Math.max(1, Math.min(300, Math.floor((memMb - 350) / 110)));
+  // Friends besides the owner. Many WhatsApp accounts from one IP address look
+  // like an account farm, so the default stays small even on a big VM.
+  const MAX_USERS = Number(process.env.GD_MAX_USERS) || Math.max(1, Math.min(15, Math.floor((memMb - 350) / 110)));
   const quiet = pino({ level: process.env.GD_DEBUG ? 'debug' : 'silent' });
 
   const cfg = (() => {
@@ -171,7 +174,7 @@ async function main() {
     constructor({ room, secret, dir, owner = false, name = null, code = null, joinedAt = Date.now() }) {
       Object.assign(this, { room, secret, dir, owner, name, code, joinedAt });
       this.authDir = join(dir, 'auth');
-      this.state = { v: 2, version: VERSION, status: 'starting', qr: null, me: null, groups: [], error: null, lastMessageAt: 0, at: 0 };
+      this.state = { v: 2, version: VERSION, hygiene: { readOnly: true, reconnectsLastHour: 0, blockedWrites: 0 }, status: 'starting', qr: null, me: null, groups: [], error: null, lastMessageAt: 0, at: 0 };
       this.config = { groups: [] };
       this.selected = new Set();
       this.linkRequestedAt = 0;
@@ -192,6 +195,11 @@ async function main() {
       this.toArchive = [];
       this.digestRun = null; // the scheduled digest in progress
       this.downSince = 0; // linked, but not connected to WhatsApp since then
+      this.closes = new Limiter(1000, 3600e3); // connection drops in the last hour
+      this.codes = new Limiter(5, 3600e3); // pairing codes asked of WhatsApp
+      this.groupFetches = new Limiter(6, 3600e3);
+      this.groupTimer = null;
+      this.blockedWrites = 0;
       this.downAlerted = false;
       this.digestState = { lastKey: null, ends: {}, tries: 0, nextTry: 0, testSeen: null };
     }
@@ -297,6 +305,10 @@ async function main() {
     }
 
     // ---- scheduled digests -----------------------------------------------------------
+
+    hygiene() {
+      return { readOnly: true, reconnectsLastHour: this.closes.count(), blockedWrites: this.blockedWrites };
+    }
 
     /** Called every minute: one alert when a linked account cannot reach WhatsApp for an hour. */
     checkHealth() {
@@ -459,6 +471,11 @@ async function main() {
     async requestCode(s) {
       if (this.pairDone === s || !this.pairPhone || Date.now() - this.pairAt > LINK_WINDOW_MS) return;
       this.pairDone = s;
+      const reusing = this.lastCode && this.lastCode.phone === this.pairPhone && Date.now() - this.lastCode.at < 3 * 60e3;
+      if (!reusing && !this.codes.allow()) {
+        this.setState({ error: 'Too many codes asked for in the last hour. Wait a while, then try again.' });
+        return;
+      }
       try {
         // Reuse the code for a few minutes across reconnects, so it doesn't change while someone types it.
         const reuse = this.lastCode && this.lastCode.phone === this.pairPhone && Date.now() - this.lastCode.at < 3 * 60e3 ? this.lastCode.raw : undefined;
@@ -509,8 +526,15 @@ async function main() {
       return toRecord(msg, this.groupNames, this.state.me?.name);
     }
 
+    /** Group names change rarely: ask WhatsApp at most a few times an hour, batched. */
+    refreshGroupsSoon(delay = jitter(20e3, 60e3)) {
+      clearTimeout(this.groupTimer);
+      this.groupTimer = setTimeout(() => this.refreshGroups(), delay);
+    }
+
     async refreshGroups() {
       if (!this.sock) return;
+      if (!this.groupFetches.allow()) return this.refreshGroupsSoon(15 * 60e3);
       try {
         const all = await this.sock.groupFetchAllParticipating();
         const groups = Object.values(all)
@@ -548,8 +572,18 @@ async function main() {
       s?.end?.(undefined);
     }
 
+    /** One WhatsApp connection per person, ever: a second one in parallel would fight the first. */
     async connect() {
-      if (this.stopped) return;
+      if (this.stopped || this.sock || this.connecting) return;
+      this.connecting = true;
+      try {
+        await this.openSocket();
+      } finally {
+        this.connecting = false;
+      }
+    }
+
+    async openSocket() {
       mkdirSync(this.authDir, { recursive: true, mode: 0o700 });
       const { state: auth, saveCreds } = await loadAuthState(this.authDir);
       if (!auth.creds.registered && Date.now() - this.linkRequestedAt > LINK_WINDOW_MS) {
@@ -573,6 +607,10 @@ async function main() {
         getMessage: async () => undefined,
       });
       this.sock = s;
+      makeReadOnly(s, (name) => {
+        this.blockedWrites++;
+        log(this.label(), `blocked ${name}: the sync server is read-only`);
+      });
       s.ev.on('creds.update', saveCreds);
 
       // Watchdog: if WhatsApp neither connects nor sends a QR code in 90 s, start over.
@@ -584,7 +622,8 @@ async function main() {
         this.setState({ status: this.state.status === 'connected' ? 'starting' : this.state.status, error: 'Cannot reach WhatsApp from the server yet, retrying' });
         this.sock = null;
         s.end(undefined);
-        setTimeout(() => this.connect(), Math.min(5 * 60e3, 5000 * 2 ** this.retry++));
+        this.closes.allow();
+        setTimeout(() => this.connect(), reconnectDelay(this.retry++, this.closes.count()));
       }, 90e3);
 
       s.ev.on('connection.update', (u) => {
@@ -617,7 +656,7 @@ async function main() {
           }
           this.pairPhone = null;
           this.setState({ status: 'connected', qr: null, code: null, me, error: null });
-          this.refreshGroups();
+          this.refreshGroupsSoon(jitter(3e3, 15e3));
         }
         if (u.connection === 'close') {
           const code = u.lastDisconnect?.error?.output?.statusCode;
@@ -643,15 +682,17 @@ async function main() {
             }
           }
           if (!this.downSince && auth.creds.registered) this.downSince = Date.now();
-          const wait = code === DisconnectReason.restartRequired ? 0 : Math.min(5 * 60e3, 2000 * 2 ** this.retry++);
+          this.closes.allow();
+          const wait = code === DisconnectReason.restartRequired ? 0 : reconnectDelay(this.retry++, this.closes.count());
+          this.setState({ hygiene: this.hygiene() });
           log(this.label(), `connection closed (${code ?? 'no code'}), reconnecting in ${Math.round(wait / 1000)}s`);
           setTimeout(() => this.connect(), wait);
         }
       });
 
-      s.ev.on('groups.upsert', () => this.refreshGroups());
+      s.ev.on('groups.upsert', () => this.refreshGroupsSoon());
       s.ev.on('groups.update', (ups) => {
-        if (ups.some((g) => g.subject)) this.refreshGroups();
+        if (ups.some((g) => g.subject)) this.refreshGroupsSoon();
       });
 
       s.ev.on('messages.upsert', ({ messages, type }) => {
@@ -919,7 +960,7 @@ async function main() {
   for (const s of sessions.values()) {
     await s.pollConfig();
     s.connect();
-    await new Promise((r) => setTimeout(r, 1500)); // stagger reconnects
+    await new Promise((r) => setTimeout(r, jitter(3e3, 8e3))); // stagger reconnects, like separate devices
   }
 
   setInterval(() => host.pollInbox(), 30e3);
@@ -953,8 +994,8 @@ async function main() {
     }
   }, 15 * 60e3);
   setInterval(() => {
-    for (const s of sessions.values()) s.refreshGroups();
-  }, 6 * 3600e3);
+    for (const s of sessions.values()) s.refreshGroupsSoon(jitter(0, 3600e3));
+  }, 24 * 3600e3);
   setTimeout(backupNow, Number(process.env.GD_BACKUP_AFTER_MS) || 10 * 60e3);
   setInterval(backupNow, 24 * 3600e3);
   if (restoredFrom) setTimeout(() => owner.notice('Sync server restored', `This server came back from the backup of ${new Date(restoredFrom).toUTCString()}. WhatsApp links and friends carried over.`, 'health'), 60e3);
