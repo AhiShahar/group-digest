@@ -11,15 +11,19 @@
 // encrypted; the relay never sees message text or keys.
 //
 // Message text is held in memory only until it is handed to the relay (a few
-// seconds), and is never written to disk or logs. On disk: each person's
-// WhatsApp link, their pairing key (so restarts reconnect), and the server's
-// own key pair for invites.
+// seconds), and is never written to logs. It is written to disk only for a
+// person who turns on scheduled digests: then the groups they chose are kept,
+// encrypted with their own key, for about a week (archive/), so the server can
+// summarize them at the chosen time with that person's own AI. Also on disk:
+// each person's WhatsApp link, their pairing key (so restarts reconnect), and
+// the server's own key pair for invites.
 //
 // Config: /etc/group-digest/sync.json  {"relay": "https://...", "room": "...", "secret": "..."}
 //   or env GD_RELAY, GD_ROOM, GD_SECRET.  Data dir: GD_DATA (default /var/lib/group-digest).
 //   GD_MAX_USERS: friends allowed besides the owner (default: what memory allows).
 
 import { createHash } from 'node:crypto';
+import { appendFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { totalmem } from 'node:os';
@@ -31,13 +35,76 @@ import makeWASocket, { Browsers, DisconnectReason, fetchLatestBaileysVersion, us
 import { deriveKeys, hostInbox, importHostKey, newHostKey, open, openSealed, seal } from './crypto.mjs';
 import { toRecord } from './parse.mjs';
 
-const VERSION = '0.3.0';
+const VERSION = '0.4.0';
 const SELF = fileURLToPath(import.meta.url);
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 
 // Give Node a heap that matches the machine, so more people fit on bigger VMs.
 const memMb = Math.round(totalmem() / 2 ** 20);
 const wantHeapMb = Math.max(384, Math.round(memMb * 0.7));
+// Files the server is made of. Newer versions can add files: older installers
+// only fetch the first few, so fetch any that are missing before using them,
+// and teach update.sh to read the list from files.txt from now on.
+const BASE_FILES = ['bridge.mjs', 'crypto.mjs', 'parse.mjs', 'package.json'];
+function relayUrl() {
+  try {
+    return (process.env.GD_RELAY || JSON.parse(readFileSync(process.env.GD_CONFIG || '/etc/group-digest/sync.json', 'utf8')).relay || '').replace(/\/+$/, '');
+  } catch {
+    return (process.env.GD_RELAY || '').replace(/\/+$/, '');
+  }
+}
+async function serverFiles() {
+  try {
+    const res = await fetch(`${relayUrl()}/bridge/files.txt`, { signal: AbortSignal.timeout(20e3) });
+    if (res.ok) {
+      const list = (await res.text()).split(/\s+/).filter((f) => /^[a-z0-9-]+\.(mjs|json)$/.test(f));
+      if (list.length) return list;
+    }
+  } catch {
+    /* offline: use what is here */
+  }
+  return [...BASE_FILES, 'digest.mjs'];
+}
+async function loadModule(name) {
+  const here = join(SELF, '..');
+  const local = join(here, name);
+  if (!existsSync(local)) {
+    const res = await fetch(`${relayUrl()}/bridge/${name}`, { signal: AbortSignal.timeout(30e3) });
+    if (!res.ok) throw new Error(`could not download ${name} (${res.status})`);
+    writeFileSync(local, Buffer.from(await res.arrayBuffer()));
+  }
+  upgradeUpdater(here);
+  return import(`./${name}`);
+}
+function upgradeUpdater(here) {
+  const file = join(here, 'update.sh');
+  try {
+    const cur = readFileSync(file, 'utf8');
+    if (cur.includes('files.txt')) return;
+    const relay = relayUrl();
+    if (!relay) return;
+    writeFileSync(
+      file,
+      `#!/bin/bash
+set -e
+cd "${here}"
+FILES=$(curl -fsSL "${relay}/bridge/files.txt" 2>/dev/null | tr -cd 'a-z0-9.\\n-' || true)
+[ -n "$FILES" ] || FILES="bridge.mjs crypto.mjs parse.mjs package.json"
+for f in $FILES; do
+  curl -fsSL "${relay}/bridge/$f" -o "$f.new" && mv "$f.new" "$f"
+done
+if ! cmp -s package.json .installed-package.json || [ ! -d node_modules ]; then
+  /usr/local/bin/npm install --omit=dev --no-audit --no-fund --loglevel=error
+  cp package.json .installed-package.json
+fi
+`,
+      { mode: 0o755 },
+    );
+  } catch {
+    /* not installed by setup.sh (tests, a laptop): nothing to upgrade */
+  }
+}
+
 if (!process.env.GD_CHILD && getHeapStatistics().heap_size_limit / 2 ** 20 < wantHeapMb * 0.9) {
   const child = spawn(process.execPath, [`--max-old-space-size=${wantHeapMb}`, SELF], { stdio: 'inherit', env: { ...process.env, GD_CHILD: '1' } });
   for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => child.kill(sig));
@@ -47,6 +114,7 @@ if (!process.env.GD_CHILD && getHeapStatistics().heap_size_limit / 2 ** 20 < wan
 }
 
 async function main() {
+  const { duePeriod, friendlyAiError, summarizeGroup } = await loadModule('digest.mjs');
   const DATA = process.env.GD_DATA || '/var/lib/group-digest';
   const LINK_WINDOW_MS = 10 * 60e3; // show QR codes for 10 minutes after the app asks
   const HISTORY_KEEP_MS = 60 * 60e3; // recent history from linking, kept in memory for an hour
@@ -118,6 +186,10 @@ async function main() {
       this.stopped = false;
       this.lastPushed = '';
       this.timer = null;
+      this.archiveDir = join(dir, 'archive');
+      this.toArchive = [];
+      this.digestRun = null; // the scheduled digest in progress
+      this.digestState = { lastKey: null, ends: {}, tries: 0, nextTry: 0, testSeen: null };
     }
 
     label() {
@@ -132,6 +204,170 @@ async function main() {
       } catch {
         /* first run */
       }
+      try {
+        Object.assign(this.digestState, JSON.parse(readFileSync(join(this.dir, 'digest-state.json'), 'utf8')));
+      } catch {
+        /* no digests yet */
+      }
+    }
+
+    // ---- notices: small sealed notes the Worker pushes to this person's phones ----
+
+    async notice(title, body, tag = 'notice') {
+      try {
+        const blob = await seal(this.keys, 'notice', { title: String(title).slice(0, 120), body: String(body).slice(0, 1200), tag, at: Date.now() });
+        await relay(this.keys, 'POST', 'notice', { blob, tag });
+      } catch (e) {
+        log(this.label(), 'notice failed:', e.message);
+      }
+    }
+
+    // ---- archive: chosen groups kept on disk, encrypted, for scheduled digests ----
+
+    keepDays() {
+      const d = this.config.digest;
+      if (!d?.on) return 0;
+      return d.freq === 'weekly' ? 9 : 3;
+    }
+
+    keep(rec) {
+      if (this.keepDays() > 0) this.toArchive.push(rec);
+    }
+
+    async writeArchive() {
+      if (!this.toArchive.length) return;
+      const batch = this.toArchive;
+      this.toArchive = [];
+      try {
+        mkdirSync(this.archiveDir, { recursive: true, mode: 0o700 });
+        const line = await seal(this.keys, 'archive', batch);
+        appendFileSync(join(this.archiveDir, `${new Date().toISOString().slice(0, 10)}.log`), line + '\n', { mode: 0o600 });
+      } catch (e) {
+        log(this.label(), 'archive write failed:', e.message);
+      }
+    }
+
+    async readArchive(since) {
+      const out = new Map();
+      let files = [];
+      try {
+        files = readdirSync(this.archiveDir).filter((f) => /^\d{4}-\d{2}-\d{2}\.log$/.test(f)).sort();
+      } catch {
+        return [];
+      }
+      const fromDay = new Date(since - 864e5).toISOString().slice(0, 10);
+      for (const f of files) {
+        if (f.slice(0, 10) < fromDay) continue;
+        for (const line of readFileSync(join(this.archiveDir, f), 'utf8').split('\n')) {
+          if (!line) continue;
+          try {
+            for (const m of await open(this.keys, 'archive', line)) if (m.ts > since) out.set(m.id, m);
+          } catch {
+            /* written with an old key */
+          }
+        }
+      }
+      return [...out.values()].sort((a, b) => a.ts - b.ts);
+    }
+
+    pruneArchive() {
+      const days = this.keepDays();
+      if (!days) {
+        if (existsSync(this.archiveDir)) rmSync(this.archiveDir, { recursive: true, force: true });
+        return;
+      }
+      const cutoff = new Date(Date.now() - days * 864e5).toISOString().slice(0, 10);
+      try {
+        for (const f of readdirSync(this.archiveDir)) if (f.slice(0, 10) < cutoff) rmSync(join(this.archiveDir, f), { force: true });
+      } catch {
+        /* nothing kept yet */
+      }
+    }
+
+    saveDigestState() {
+      try {
+        writeFileSync(join(this.dir, 'digest-state.json'), JSON.stringify(this.digestState), { mode: 0o600 });
+      } catch (e) {
+        log(this.label(), 'could not save digest state:', e.message);
+      }
+    }
+
+    // ---- scheduled digests -----------------------------------------------------------
+
+    /** Called every minute. Runs the person's digest when it is due (or when they asked for a test). */
+    async maybeDigest() {
+      const d = this.config.digest;
+      if (!d?.on || this.digestRun || this.stopped) return;
+      const st = this.digestState;
+      const test = Number(d.testAt) || 0;
+      if (st.testSeen === null) st.testSeen = test; // first run: ignore old test requests
+      const wantTest = test > st.testSeen && Date.now() - test < 30 * 60e3;
+      const key = duePeriod(d);
+      const wantScheduled = key && key !== st.lastKey && Date.now() >= (st.nextTry || 0);
+      if (!wantTest && !wantScheduled) return;
+      this.digestRun = this.runDigest(d, wantTest ? 'test' : key)
+        .catch((e) => log(this.label(), 'digest run failed:', e.message))
+        .finally(() => (this.digestRun = null));
+    }
+
+    async runDigest(d, key) {
+      const test = key === 'test';
+      const st = this.digestState;
+      if (test) st.testSeen = Number(d.testAt) || 0;
+      await this.writeArchive();
+      const span = d.freq === 'weekly' ? 7 : 1;
+      const floor = Date.now() - span * 864e5 - 3600e3;
+      const groups = (Array.isArray(d.groups) && d.groups.length ? d.groups : [...this.selected]).filter((g) => this.selected.has(g));
+      const since = Math.min(...groups.map((g) => (test ? floor : Math.max(floor, st.ends[g] || 0))), Date.now());
+      const all = await this.readArchive(since);
+      const out = [];
+      let failure = null;
+      for (const g of groups) {
+        const from = test ? floor : Math.max(floor, st.ends[g] || 0);
+        const msgs = all.filter((m) => m.group === g && m.ts > from);
+        if (!msgs.length) continue;
+        const chat = msgs[msgs.length - 1].chat || this.groupNames.get(g) || g;
+        try {
+          const r = await summarizeGroup(
+            d.ai,
+            d.models,
+            { chatName: chat, focus: (d.focus && d.focus[chat]) || '', language: d.language || 'English', timeZone: d.tz || 'UTC' },
+            msgs,
+            { referer: cfg.relay },
+          );
+          out.push({ group: g, chat, from: r.from, to: r.to, messageCount: r.count, model: `${d.ai.provider}/${r.model}`, digest: r.digest });
+        } catch (e) {
+          log(this.label(), `digest for one group failed: ${e.message}`);
+          failure = e;
+          if (e.status === 401 || e.status === 403 || e.status === 402) break; // the same for every group
+        }
+        await new Promise((r) => setTimeout(r, 3000)); // gentle on free AI limits
+      }
+      const label = test ? 'Test digest' : d.freq === 'weekly' ? 'Weekly digest' : 'Daily digest';
+      if (out.length) {
+        await relay(this.keys, 'POST', 'messages', { blob: await seal(this.keys, 'messages', { v: 2, messages: [], digests: out }) });
+        const lines = out.map((x) => `${x.chat}: ${x.digest.headline}`);
+        await this.notice(`${label}: ${out.length} group${out.length === 1 ? '' : 's'}`, lines.join('\n'), 'digest');
+      }
+      if (failure && (!out.length || test)) {
+        // Nothing made: try again in 20 minutes, up to 3 times, then tell the person.
+        if (!test && ++st.tries < 3 && failure.status !== 401 && failure.status !== 403) {
+          st.nextTry = Date.now() + 20 * 60e3;
+          this.saveDigestState();
+          return;
+        }
+        await this.notice(`${label} not made`, friendlyAiError(failure), 'digest-error');
+      } else if (!out.length && test) {
+        await this.notice('Test digest', 'No new messages in your chosen groups in the last day, so there was nothing to summarize.', 'digest');
+      }
+      if (!test) {
+        for (const x of out) st.ends[x.group] = x.to;
+        st.lastKey = key;
+        st.tries = 0;
+        st.nextTry = 0;
+      }
+      this.saveDigestState();
+      log(this.label(), `${label.toLowerCase()} done: ${out.length} groups`);
     }
 
     setState(patch) {
@@ -164,6 +400,7 @@ async function main() {
         if (!r.blob) return;
         const c = await open(this.keys, 'config', r.blob);
         this.config = c;
+        if (!this.keepDays()) this.pruneArchive();
         const before = this.selected;
         this.selected = new Set(Array.isArray(c.groups) ? c.groups : []);
         this.queueHistory([...this.selected].filter((g) => !before.has(g)));
@@ -227,6 +464,7 @@ async function main() {
       for (const h of this.history) {
         if (h.keptAt >= cutoff && want.has(h.msg.group) && !this.seen.has(h.msg.id)) {
           this.queue.push(h.msg);
+          this.keep(h.msg);
           this.remember(h.msg.id);
         }
       }
@@ -273,6 +511,8 @@ async function main() {
       }
       s?.end?.(undefined);
       rmSync(this.authDir, { recursive: true, force: true });
+      rmSync(this.archiveDir, { recursive: true, force: true });
+      this.toArchive.length = 0;
       this.history.length = 0;
       this.queue.length = 0;
       this.setState({ status: 'unlinked', qr: null, me: null, groups: [], error: null });
@@ -380,6 +620,7 @@ async function main() {
           if (!rec) continue;
           this.remember(rec.id);
           this.queue.push(rec);
+          this.keep(rec);
         }
       });
 
@@ -395,6 +636,7 @@ async function main() {
             if (!this.seen.has(rec.id)) {
               this.remember(rec.id);
               this.queue.push(rec);
+              this.keep(rec);
             }
           } else this.history.push({ msg: rec, keptAt });
         }
@@ -542,7 +784,7 @@ async function main() {
   const sha = (buf) => createHash('sha256').update(buf).digest('hex');
   async function checkForUpdate() {
     try {
-      const files = ['bridge.mjs', 'parse.mjs', 'crypto.mjs', 'package.json'];
+      const files = await serverFiles();
       for (const f of files) {
         const res = await fetch(`${cfg.relay}/bridge/${f}`, { signal: AbortSignal.timeout(20e3) });
         if (!res.ok) return;
@@ -559,6 +801,7 @@ async function main() {
 
   async function shutdown(code) {
     for (const s of sessions.values()) await s.flush();
+    for (const s of sessions.values()) await s.writeArchive();
     for (const s of sessions.values()) await s.stop();
     process.exit(code);
   }
@@ -606,8 +849,14 @@ async function main() {
     s.pollConfig();
   }, Math.max(10e3, (30 * 60e3) / Math.max(1, sessions.size)));
   setInterval(() => {
-    for (const s of sessions.values()) s.flush();
+    for (const s of sessions.values()) s.flush().then(() => s.writeArchive());
   }, 15e3);
+  setInterval(() => {
+    for (const s of sessions.values()) s.maybeDigest();
+  }, 60e3);
+  setInterval(() => {
+    for (const s of sessions.values()) s.pruneArchive();
+  }, 6 * 3600e3);
   setInterval(() => {
     for (const s of sessions.values()) {
       s.pruneHistory();

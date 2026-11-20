@@ -2,7 +2,9 @@
 // server (public/bridge/bridge.mjs) links WhatsApp and drops encrypted batches
 // of messages there; this pulls, decrypts and stores them, then deletes them
 // from the relay. Nothing here can be read by the relay.
-import { getKv, setKv, storeCaptured } from './store';
+import { DigestSchema, sanitizeEvents, type Digest } from './digest';
+import type { ProviderSettings } from './providerInfo';
+import { getKv, listChats, loadSettings, newId, putChat, putDigest, setKv, storeCaptured, type StoredDigest } from './store';
 import { deriveKeys, newInviteCode, newPairing, open, seal, sealTo, type SyncKeys } from './syncCrypto';
 
 /** Where the relay lives. The web app uses its own origin; the Android app uses the hosted one. */
@@ -34,6 +36,40 @@ export interface SyncPairing {
   /** member only: who invited them, and a request to leave. */
   hostName?: string;
   leave?: boolean;
+  /** Scheduled digests made by the sync server with this person's own AI. */
+  digest?: DigestSchedule;
+  /** This phone gets notices (digests ready, alerts) by Web Push. */
+  pushEndpoint?: string;
+}
+
+export interface DigestSchedule {
+  on: boolean;
+  freq: 'daily' | 'weekly';
+  hour: number;
+  minute: number;
+  weekday: number; // 0 = Sunday
+  tz: string;
+  groups: string[]; // empty = every synced group
+  /** Models to try in order, picked by the app from the provider's live list. */
+  models: string[];
+  testAt?: number;
+}
+
+export const DEFAULT_SCHEDULE: DigestSchedule = {
+  on: false,
+  freq: 'daily',
+  hour: 20,
+  minute: 0,
+  weekday: 0,
+  tz: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+  groups: [],
+  models: [],
+};
+
+/** AI providers the sync server can call by itself (a local Ollama on this computer it cannot reach). */
+export function serverCanUse(s: ProviderSettings): boolean {
+  if (s.provider !== 'compatible') return !!s.apiKey;
+  return /^https:\/\//.test(s.baseUrl) && !/localhost|127\.0\.0\.1|\.local\b|192\.168\./.test(s.baseUrl);
 }
 
 export interface HostInfo {
@@ -74,6 +110,16 @@ export interface BridgeState {
   lastMessageAt: number;
   at: number; // when the server last reported
   host?: HostInfo & { max: number; members: Member[] }; // owner only
+}
+
+interface SyncedDigest {
+  group: string;
+  chat: string;
+  from: number;
+  to: number;
+  messageCount: number;
+  model: string;
+  digest: Digest;
 }
 
 interface SyncedMessage {
@@ -118,11 +164,22 @@ export async function createPairing(): Promise<SyncPairing> {
   return p;
 }
 
+/** The schedule as the server needs it: with this phone's AI settings and the chats' focus notes. */
+async function digestConfig(p: SyncPairing) {
+  if (!p.digest?.on) return undefined;
+  const s = await loadSettings();
+  if (!serverCanUse(s)) return { ...p.digest, on: false };
+  const focus: Record<string, string> = {};
+  for (const c of await listChats()) if (c.focus) focus[c.name] = c.focus;
+  return { ...p.digest, ai: { provider: s.provider, apiKey: s.apiKey, baseUrl: s.baseUrl }, language: s.language, focus };
+}
+
 export async function pushConfig(p: SyncPairing): Promise<void> {
   const k = await keysFor(p);
+  const digest = await digestConfig(p);
   const config =
     p.role === 'member'
-      ? { v: 2, groups: p.groups, linkRequestedAt: p.linkRequestedAt, unlink: p.unlink, pairPhone: p.pairPhone, pairAt: p.pairAt, leave: !!p.leave }
+      ? { v: 2, groups: p.groups, linkRequestedAt: p.linkRequestedAt, unlink: p.unlink, pairPhone: p.pairPhone, pairAt: p.pairAt, leave: !!p.leave, digest }
       : {
           v: 2,
           groups: p.groups,
@@ -133,6 +190,7 @@ export async function pushConfig(p: SyncPairing): Promise<void> {
           update: p.update ?? 0,
           invites: p.invites ?? [],
           remove: p.remove ?? [],
+          digest,
         };
   await call(p, 'PUT', 'config', { blob: await seal(k, 'config', config) });
   if (p.host) await nudge(p.relay, p.host, { type: 'ping', room: p.room }).catch(() => undefined);
@@ -208,29 +266,101 @@ export async function fetchState(p: SyncPairing): Promise<BridgeState | null> {
 }
 
 /** Pull new messages into the local store. Returns how many were new. */
+export let lastDigests = 0;
+
 export async function pullMessages(p: SyncPairing): Promise<number> {
   const k = await keysFor(p);
   let cursor = p.cursor;
   let added = 0;
+  lastDigests = 0;
   for (let round = 0; round < 20; round++) {
     const r = await call<{ batches: { seq: number; blob: string }[] }>(p, 'GET', 'messages', undefined, `?after=${cursor}`);
     if (!r.batches.length) break;
     const items: SyncedMessage[] = [];
+    const digests: SyncedDigest[] = [];
     for (const b of r.batches) {
       try {
-        items.push(...(await open<{ messages: SyncedMessage[] }>(k, 'messages', b.blob)).messages);
+        const v = await open<{ messages: SyncedMessage[]; digests?: SyncedDigest[] }>(k, 'messages', b.blob);
+        items.push(...(v.messages ?? []));
+        digests.push(...(v.digests ?? []));
       } catch {
         /* a batch we cannot read (old pairing): skip it */
       }
       cursor = Math.max(cursor, b.seq);
     }
     added += await storeCaptured(items.filter((m) => p.groups.includes(m.group)));
+    lastDigests += await storeDigests(digests);
     const latest = (await loadPairing()) ?? p;
     await savePairing({ ...latest, cursor });
     await call(p, 'POST', 'ack', { upTo: cursor });
     if (r.batches.length < 100) break;
   }
   return added;
+}
+
+/** Save digests the server made on schedule, next to the chat they belong to. */
+export async function storeDigests(list: SyncedDigest[]): Promise<number> {
+  let n = 0;
+  for (const x of list) {
+    const parsed = DigestSchema.safeParse(x.digest);
+    if (!parsed.success || !x.chat) continue;
+    const digest = { ...parsed.data, events: sanitizeEvents(parsed.data.events, x.from, x.to) };
+    let chat = (await listChats()).find((c) => c.name === x.chat);
+    if (!chat) {
+      chat = { id: newId(), name: x.chat, importedAt: Date.now(), messages: [], focus: '', lastDigestEnd: null };
+    }
+    const rec: StoredDigest = {
+      id: newId(),
+      chatId: chat.id,
+      createdAt: Date.now(),
+      from: x.from,
+      to: x.to,
+      messageCount: x.messageCount,
+      model: `${x.model} · scheduled`,
+      digest,
+    };
+    await putDigest(rec);
+    await putChat({ ...chat, lastDigestEnd: Math.max(chat.lastDigestEnd ?? 0, x.to) });
+    n++;
+  }
+  return n;
+}
+
+// ---- notices by Web Push ----------------------------------------------------------
+
+export interface SyncNotice {
+  seq: number;
+  at: number;
+  tag: string;
+  title: string;
+  body: string;
+}
+
+/** Ask the relay to push this room's notices to this phone. */
+export async function registerPush(p: SyncPairing, sub: PushSubscriptionJSON): Promise<void> {
+  await call(p, 'PUT', 'push', { sub, offline: p.role !== 'member' });
+}
+
+export async function unregisterPush(p: SyncPairing, endpoint: string): Promise<void> {
+  await call(p, 'POST', 'push-remove', { endpoint });
+}
+
+/** Recent notices, opened. Plain alerts from the relay itself have no seal. */
+export async function fetchNotices(p: SyncPairing, after = 0): Promise<SyncNotice[]> {
+  const k = await keysFor(p);
+  const r = await call<{ notices: { seq: number; at: number; tag: string; blob?: string; title?: string; body?: string }[] }>(p, 'GET', 'notices', undefined, `?after=${after}`);
+  const out: SyncNotice[] = [];
+  for (const n of r.notices) {
+    if (n.blob) {
+      try {
+        const v = await open<{ title: string; body: string }>(k, 'notice', n.blob);
+        out.push({ seq: n.seq, at: n.at, tag: n.tag, title: v.title, body: v.body });
+      } catch {
+        /* sealed with another key */
+      }
+    } else if (n.title) out.push({ seq: n.seq, at: n.at, tag: n.tag, title: n.title, body: n.body ?? '' });
+  }
+  return out;
 }
 
 /** Delete every undelivered batch from the relay. */

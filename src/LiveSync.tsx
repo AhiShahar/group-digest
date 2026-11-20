@@ -20,6 +20,8 @@ import {
   type BridgeState,
   type SyncPairing,
 } from './lib/liveSync';
+import type { AppSettings } from './lib/store';
+import Scheduled, { RecentNotices } from './Scheduled';
 
 type Host = 'oracle' | 'google' | 'computer';
 
@@ -300,7 +302,7 @@ function JoinCard({ inv, onJoined, onToast }: { inv: ParsedInvite; onJoined: (p:
   );
 }
 
-export default function LiveSync({ onToast, onSynced }: { onToast: (s: string) => void; onSynced: () => void }) {
+export default function LiveSync({ settings, onToast, onSynced }: { settings: AppSettings; onToast: (s: string) => void; onSynced: () => void }) {
   const [p, setP] = useState<SyncPairing | null | undefined>(undefined);
   const [st, setSt] = useState<BridgeState | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -507,6 +509,9 @@ export default function LiveSync({ onToast, onSynced }: { onToast: (s: string) =
                 )}
               </>
             )}
+
+            {st?.status === 'connected' && p.groups.length > 0 && <Scheduled p={p} st={st} settings={settings} onUpdate={update} onToast={onToast} />}
+            {st && st.status !== 'removed' && <RecentNotices p={p} />}
 
             {!member && st?.host && <Friends p={p} st={st} onUpdate={update} onToast={onToast} />}
 

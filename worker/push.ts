@@ -23,7 +23,7 @@ export interface PushEnv {
   PUSH: DurableObjectNamespace<PushBox>;
 }
 
-interface Sub {
+export interface Sub {
   endpoint: string;
   keys: { p256dh: string; auth: string };
 }
@@ -78,7 +78,7 @@ const concat = (...parts: Uint8Array[]) => {
 
 // ---------- validation ----------
 
-function asSub(v: unknown): Sub | null {
+export function asSub(v: unknown): Sub | null {
   const s = v as Sub;
   try {
     const u = new URL(s.endpoint);
@@ -143,7 +143,7 @@ export async function handlePush(req: Request, env: PushEnv, path: string): Prom
 
 // ---------- the Durable Object ----------
 
-type Stored = { sub: Sub; origin: string };
+export type Stored = { sub: Sub; origin: string };
 
 export class PushBox extends DurableObject<PushEnv> {
   // --- VAPID keys (only used on the KEYS_ROOM instance) ---
@@ -222,28 +222,32 @@ export class PushBox extends DurableObject<PushEnv> {
     await this.arm(rest);
   }
 
-  private async send(st: Stored, r: Reminder): Promise<number> {
-    const keys = await this.env.PUSH.get(this.env.PUSH.idFromName(KEYS_ROOM)).vapid();
-    const payload = JSON.stringify({ title: r.title, body: r.body, tag: r.id.split('#')[0] });
-    const bodyBytes = await encryptPayload(st.sub, enc.encode(payload));
-    const jwt = await vapidJwt(keys.jwk, new URL(st.sub.endpoint).origin, st.origin);
-    try {
-      const res = await fetch(st.sub.endpoint, {
-        method: 'POST',
-        headers: {
-          'content-encoding': 'aes128gcm',
-          'content-type': 'application/octet-stream',
-          ttl: String(6 * 3600),
-          urgency: 'high',
-          topic: b64u(new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode(r.id))).slice(0, 24)),
-          authorization: `vapid t=${jwt}, k=${keys.pub}`,
-        },
-        body: bodyBytes,
-      });
-      return res.status;
-    } catch {
-      return 503;
-    }
+  private send(st: Stored, r: Reminder): Promise<number> {
+    return sendPush(this.env, st, { title: r.title, body: r.body, tag: r.id.split('#')[0] }, r.id);
+  }
+}
+
+/** Send one Web Push message. Returns the push service's HTTP status (503 when unreachable). */
+export async function sendPush(env: PushEnv, st: Stored, payload: unknown, topicId: string, ttl = 6 * 3600): Promise<number> {
+  const keys = await env.PUSH.get(env.PUSH.idFromName(KEYS_ROOM)).vapid();
+  const bodyBytes = await encryptPayload(st.sub, enc.encode(JSON.stringify(payload)));
+  const jwt = await vapidJwt(keys.jwk, new URL(st.sub.endpoint).origin, st.origin);
+  try {
+    const res = await fetch(st.sub.endpoint, {
+      method: 'POST',
+      headers: {
+        'content-encoding': 'aes128gcm',
+        'content-type': 'application/octet-stream',
+        ttl: String(ttl),
+        urgency: 'high',
+        topic: b64u(new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode(topicId))).slice(0, 24)),
+        authorization: `vapid t=${jwt}, k=${keys.pub}`,
+      },
+      body: bodyBytes,
+    });
+    return res.status;
+  } catch {
+    return 503;
   }
 }
 

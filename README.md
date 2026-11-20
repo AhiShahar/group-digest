@@ -76,6 +76,8 @@ Each person's data and key stay on their own device, so testers do not see each 
 
 ## Live sync (linked device)
 
+**Scheduled digests (live sync):** in Live sync, pick Every day or Every week and a time. The sync server keeps the chosen groups' messages on its disk (sealed with the person's own key, 3 days for daily, 9 for weekly, deleted when turned off), summarizes each group with new messages at that time using the AI settings sent from the phone (inside the encrypted config), and sends the digests through the relay like messages. A sealed notice goes to the relay's `/notice`, which Web Pushes it to phones that tapped Notify me; the service worker opens it with the room key, so the Worker never sees the text. Code: `public/bridge/digest.mjs` (same prompt as the app, checked by a test), `src/Scheduled.tsx`.
+
 Settings > **Live sync from WhatsApp** links WhatsApp once by QR code, like WhatsApp Web, and new messages from the groups you tick flow into the app on any phone, iPhone included. Unofficial: WhatsApp may restrict accounts that use it, so start with your own number.
 
 ```

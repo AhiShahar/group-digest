@@ -2,7 +2,7 @@
 // secret; the relay in the Worker only ever sees ciphertext and a token hash.
 // Keep in step with bridge/crypto.mjs (syncCrypto.test.ts checks both agree).
 
-export type BlobKind = 'state' | 'config' | 'messages';
+export type BlobKind = 'state' | 'config' | 'messages' | 'notice' | 'archive';
 
 const enc = new TextEncoder();
 
