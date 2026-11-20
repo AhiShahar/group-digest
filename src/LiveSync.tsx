@@ -447,13 +447,13 @@ export default function LiveSync({ settings, onToast, onSynced }: { settings: Ap
   }, [p, st?.status]);
 
   const [showQuiet, setShowQuiet] = useState(false);
-  const { groups, quiet } = useMemo(() => {
+  const { groups, quiet, learning } = useMemo(() => {
     const f = filter.trim().toLowerCase();
     const all = st?.groups ?? [];
     // Searching looks through every group, quiet ones too.
-    if (f) return { groups: all.filter((g) => g.name.toLowerCase().includes(f) || p?.groups.includes(g.id)), quiet: 0 };
+    if (f) return { groups: all.filter((g) => g.name.toLowerCase().includes(f) || p?.groups.includes(g.id)), quiet: 0, learning: false };
     const split = splitActive(all, (g) => g.last, (g) => !!p?.groups.includes(g.id));
-    return { groups: showQuiet ? all : split.shown, quiet: split.hidden.length };
+    return { groups: showQuiet ? all : split.shown, quiet: split.hidden.length, learning: split.unknown && all.length > 8 };
   }, [st?.groups, filter, p?.groups, showQuiet]);
 
   if (p === undefined) return null;
@@ -607,6 +607,13 @@ export default function LiveSync({ settings, onToast, onSynced }: { settings: Ap
                       </li>
                     ))}
                   </ul>
+                )}
+                {learning && (
+                  <p className="small muted">
+                    {/^0\.([0-4]\.|5\.0$)/.test(st.version)
+                      ? 'Groups quiet for a month will be tucked away once your sync server updates. It updates itself within 6 hours, or straight away if you restart it.'
+                      : 'Your sync server is learning which groups are active from new messages. Groups quiet for a month will be tucked away as it does.'}
+                  </p>
                 )}
                 {quiet > 0 && (
                   <p className="small muted">
