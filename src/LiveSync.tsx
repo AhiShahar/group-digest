@@ -2,6 +2,7 @@
 // Styling uses the shared classes from styles.css (card, row, small, muted...).
 import QRCode from 'qrcode';
 import { useEffect, useMemo, useState } from 'react';
+import { splitActive } from './lib/active';
 import {
   createPairing,
   inviteLink,
@@ -445,10 +446,15 @@ export default function LiveSync({ settings, onToast, onSynced }: { settings: Ap
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p, st?.status]);
 
-  const groups = useMemo(() => {
+  const [showQuiet, setShowQuiet] = useState(false);
+  const { groups, quiet } = useMemo(() => {
     const f = filter.trim().toLowerCase();
-    return (st?.groups ?? []).filter((g) => !f || g.name.toLowerCase().includes(f) || p?.groups.includes(g.id));
-  }, [st?.groups, filter, p?.groups]);
+    const all = st?.groups ?? [];
+    // Searching looks through every group, quiet ones too.
+    if (f) return { groups: all.filter((g) => g.name.toLowerCase().includes(f) || p?.groups.includes(g.id)), quiet: 0 };
+    const split = splitActive(all, (g) => g.last, (g) => !!p?.groups.includes(g.id));
+    return { groups: showQuiet ? all : split.shown, quiet: split.hidden.length };
+  }, [st?.groups, filter, p?.groups, showQuiet]);
 
   if (p === undefined) return null;
 
@@ -601,6 +607,14 @@ export default function LiveSync({ settings, onToast, onSynced }: { settings: Ap
                       </li>
                     ))}
                   </ul>
+                )}
+                {quiet > 0 && (
+                  <p className="small muted">
+                    {showQuiet ? 'Showing every group. ' : `Showing groups with messages in the last month. ${quiet} quiet group${quiet === 1 ? ' is' : 's are'} hidden. `}
+                    <button className="link inline small" onClick={() => setShowQuiet(!showQuiet)}>
+                      {showQuiet ? 'Hide quiet groups' : `Show ${quiet === 1 ? 'it' : 'them'}`}
+                    </button>
+                  </p>
                 )}
               </>
             )}

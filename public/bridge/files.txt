@@ -4,4 +4,5 @@ parse.mjs
 digest.mjs
 backup.mjs
 hygiene.mjs
+activity.mjs
 package.json

@@ -104,6 +104,7 @@ export interface SyncGroup {
   id: string;
   name: string;
   size: number;
+  last?: number; // when the group last had a message, if the server has seen one (server 0.5.1+)
 }
 
 export interface BridgeState {

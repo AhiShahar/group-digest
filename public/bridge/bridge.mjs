@@ -35,7 +35,7 @@ import makeWASocket, { Browsers, DisconnectReason, fetchLatestBaileysVersion, us
 import { deriveKeys, hostInbox, importHostKey, newHostKey, open, openSealed, seal } from './crypto.mjs';
 import { toRecord } from './parse.mjs';
 
-const VERSION = '0.5.0';
+const VERSION = '0.5.1';
 const SELF = fileURLToPath(import.meta.url);
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 
@@ -63,7 +63,7 @@ async function serverFiles() {
   } catch {
     /* offline: use what is here */
   }
-  return [...BASE_FILES, 'digest.mjs', 'backup.mjs', 'hygiene.mjs'];
+  return [...BASE_FILES, 'digest.mjs', 'backup.mjs', 'hygiene.mjs', 'activity.mjs'];
 }
 async function loadModule(name) {
   const here = join(SELF, '..');
@@ -117,6 +117,7 @@ async function main() {
   const { duePeriod, friendlyAiError, summarizeGroup } = await loadModule('digest.mjs');
   const backup = await loadModule('backup.mjs');
   const { Limiter, jitter, makeReadOnly, reconnectDelay } = await loadModule('hygiene.mjs');
+  const { Activity } = await loadModule('activity.mjs');
   const DATA = process.env.GD_DATA || '/var/lib/group-digest';
   const LINK_WINDOW_MS = 10 * 60e3; // show QR codes for 10 minutes after the app asks
   const HISTORY_KEEP_MS = 60 * 60e3; // recent history from linking, kept in memory for an hour
@@ -202,6 +203,7 @@ async function main() {
       this.blockedWrites = 0;
       this.downAlerted = false;
       this.digestState = { lastKey: null, ends: {}, tries: 0, nextTry: 0, testSeen: null };
+      this.activity = new Activity();
     }
 
     label() {
@@ -220,6 +222,11 @@ async function main() {
         Object.assign(this.digestState, JSON.parse(readFileSync(join(this.dir, 'digest-state.json'), 'utf8')));
       } catch {
         /* no digests yet */
+      }
+      try {
+        this.activity = new Activity(JSON.parse(readFileSync(join(this.dir, 'activity.json'), 'utf8')));
+      } catch {
+        /* nothing seen yet */
       }
     }
 
@@ -404,9 +411,22 @@ async function main() {
       this.timer = setTimeout(() => this.pushState(), patch.qr ? 0 : 1500);
     }
 
+    /** Put each group's last activity in the state, and save it now and then. */
+    applyActivity() {
+      for (const g of this.state.groups) if (this.activity.last[g.id]) g.last = this.activity.last[g.id];
+      if (!this.activity.dirty) return;
+      this.activity.dirty = false;
+      try {
+        writeFileSync(join(this.dir, 'activity.json'), JSON.stringify(this.activity.last), { mode: 0o600 });
+      } catch (e) {
+        log(this.label(), 'could not save group activity:', e.message);
+      }
+    }
+
     async pushState(force = false) {
       if (this.stopped && this.state.status !== 'removed') return;
       this.state.at = Date.now();
+      this.applyActivity();
       if (this.owner) {
         this.state.host = host.summary();
         this.state.backupAt = lastBackupAt;
@@ -541,6 +561,7 @@ async function main() {
           .map((g) => ({ id: g.id, name: g.subject || g.id, size: g.participants?.length || 0 }))
           .sort((a, b) => a.name.localeCompare(b.name));
         for (const g of groups) this.groupNames.set(g.id, g.name);
+        if (groups.length) this.activity.keepOnly(groups.map((g) => g.id));
         this.setState({ groups });
       } catch (e) {
         log(this.label(), 'group list failed:', e.message);
@@ -558,6 +579,8 @@ async function main() {
       s?.end?.(undefined);
       rmSync(this.authDir, { recursive: true, force: true });
       rmSync(this.archiveDir, { recursive: true, force: true });
+      rmSync(join(this.dir, 'activity.json'), { force: true });
+      this.activity = new Activity();
       this.toArchive.length = 0;
       this.history.length = 0;
       this.queue.length = 0;
@@ -690,6 +713,8 @@ async function main() {
         }
       });
 
+      s.ev.on('chats.upsert', (cs) => cs.forEach((c) => this.activity.noteChat(c)));
+      s.ev.on('chats.update', (cs) => cs.forEach((c) => this.activity.noteChat(c)));
       s.ev.on('groups.upsert', () => this.refreshGroupsSoon());
       s.ev.on('groups.update', (ups) => {
         if (ups.some((g) => g.subject)) this.refreshGroupsSoon();
@@ -699,6 +724,7 @@ async function main() {
         if (type !== 'notify' && type !== 'append') return;
         for (const msg of messages) {
           const group = msg.key?.remoteJid;
+          if (type === 'notify') this.activity.noteMessage(msg);
           if (!group || !this.selected.has(group) || this.seen.has(msg.key.id)) continue;
           const rec = this.record(msg);
           if (!rec) continue;
@@ -710,7 +736,9 @@ async function main() {
 
       // Recent history sent right after linking, kept in memory for an hour so
       // groups chosen just after linking start with recent messages.
-      s.ev.on('messaging-history.set', ({ messages }) => {
+      s.ev.on('messaging-history.set', ({ messages, chats }) => {
+        for (const c of chats || []) this.activity.noteChat(c);
+        for (const m of messages || []) this.activity.noteMessage(m);
         const keptAt = Date.now();
         const recent = keptAt - 14 * 864e5;
         for (const msg of messages || []) {
