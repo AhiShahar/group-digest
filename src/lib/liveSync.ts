@@ -119,6 +119,7 @@ export interface BridgeState {
   at: number; // when the server last reported
   host?: HostInfo & { max: number; members: Member[] }; // owner only
   backupAt?: number; // owner only: last server backup
+  hygiene?: { readOnly: boolean; reconnectsLastHour: number; blockedWrites: number };
 }
 
 interface SyncedDigest {

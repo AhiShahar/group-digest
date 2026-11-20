@@ -85,6 +85,8 @@ Each person's data and key stay on their own device, so testers do not see each 
 
 **Friends:** Live sync > Friends on your server > Create invite gives a one-time link that works for 7 days, with Send on WhatsApp, Copy and a QR code to scan. The friend opens it on their phone, types their name and links WhatsApp (phone-number code by default on phones), then follows a short checklist. Each friend sees exactly what the owner can see, and can hide their link status and last sync from the owner.
 
+**Low-risk mode (sync server 0.5.0):** the server is read-only: every Baileys method that would send messages, read receipts, presence, or change chats, groups or the profile is disabled (`public/bridge/hygiene.mjs`). It never opens two connections for one person, reconnects with jittered backoff and pauses 30 minutes after 6 drops in an hour, asks for pairing codes at most 5 times an hour, fetches group lists at most a few times an hour (daily otherwise), staggers people's connections, and hosts at most 15 friends by default (`GD_MAX_USERS` to change), since many accounts from one IP look like a farm.
+
 Settings > **Live sync from WhatsApp** links WhatsApp once by QR code, like WhatsApp Web, and new messages from the groups you tick flow into the app on any phone, iPhone included. Unofficial: WhatsApp may restrict accounts that use it, so start with your own number.
 
 ```
