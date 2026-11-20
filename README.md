@@ -80,6 +80,8 @@ Each person's data and key stay on their own device, so testers do not see each 
 
 **Health alerts (live sync):** Live sync > Turn on alerts. The relay's room for the server owner sets a Durable Object alarm 40 minutes after each status report; if it fires, the owner's phones get "Sync server is offline" (again daily, at most 3 times) and "back online" when it reports again. The sync server itself sends sealed notices when WhatsApp logs the linked device out, when another copy takes over the link, or when it cannot reach WhatsApp for an hour. The Chats screen shows a banner while a problem is open. The Android app has no Web Push, so `NoticeReceiver` checks the room's notices about every half hour and shows them as notifications.
 
+**Backups:** with live sync set up, the app backs up its data (groups, messages, digests, settings, pairing) about once a day when opened, gzipped and sealed with the pairing key, to the relay room (`/backup`, parts of 120 KB, only the last committed copy kept). Settings > Backup shows the recovery key (`gd1-<room>-<secret>`), which restores everything on a new phone. The sync server backs up its own data directory (WhatsApp links, invite key, friends; not message archives) daily and after links or joins; a fresh VM made with the same setup script restores it on first start (`public/bridge/backup.mjs`).
+
 Settings > **Live sync from WhatsApp** links WhatsApp once by QR code, like WhatsApp Web, and new messages from the groups you tick flow into the app on any phone, iPhone included. Unofficial: WhatsApp may restrict accounts that use it, so start with your own number.
 
 ```

@@ -36,6 +36,19 @@ export async function open(k, kind, blob) {
   return JSON.parse(new TextDecoder().decode(pt));
 }
 
+/** Encrypt raw bytes (backups); same layout as the app's sealBytes. */
+export async function sealBytes(k, label, data) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: enc.encode(`${k.room}/${label}`) }, k.key, data));
+  return Buffer.concat([iv, ct]);
+}
+
+export async function openBytes(k, label, raw) {
+  return Buffer.from(
+    await crypto.subtle.decrypt({ name: 'AES-GCM', iv: raw.slice(0, 12), additionalData: enc.encode(`${k.room}/${label}`) }, k.key, raw.slice(12)),
+  );
+}
+
 // ---- host inbox: notes sealed to the server's public key (ECDH P-256 + AES-GCM) ----
 
 const hex = (b) => [...b].map((x) => x.toString(16).padStart(2, '0')).join('');
