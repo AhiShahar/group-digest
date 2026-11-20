@@ -13,6 +13,8 @@ export interface StoredChat {
   messages: ChatMessage[];
   focus: string;
   lastDigestEnd: number | null; // ts of the last message covered by a digest
+  /** Messages arrive by themselves (live sync or Android capture), so no export nudges. */
+  auto?: boolean;
 }
 
 export interface StoredDigest {
@@ -168,11 +170,11 @@ export async function storeCaptured(items: { chat: string; ts: number; sender: s
     if (existing) {
       const merged = mergeMessages(existing.messages, msgs);
       added += merged.length - existing.messages.length;
-      await putChat({ ...existing, messages: merged, importedAt: Date.now() });
+      await putChat({ ...existing, messages: merged, importedAt: Date.now(), auto: true });
     } else {
       const merged = mergeMessages([], msgs);
       added += merged.length;
-      await putChat({ id: newId(), name, importedAt: Date.now(), messages: merged, focus: '', lastDigestEnd: null });
+      await putChat({ id: newId(), name, importedAt: Date.now(), messages: merged, focus: '', lastDigestEnd: null, auto: true });
     }
   }
   return added;

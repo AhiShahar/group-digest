@@ -108,7 +108,12 @@ export default function App() {
   const [installEvt, setInstallEvt] = useState<BeforeInstallPromptEvent | null>(null);
   const [iosInstall, setIosInstall] = useState(shouldShowIosInstall);
 
-  const refreshChats = useCallback(async () => setChats(await listChats()), []);
+  // Live sync with groups ticked: chats fill by themselves, so the Chats tab leads with them.
+  const [syncOn, setSyncOn] = useState(false);
+  const refreshChats = useCallback(async () => {
+    setChats(await listChats());
+    setSyncOn(!!(await loadPairing())?.groups.length);
+  }, []);
   const [importTick, setImportTick] = useState(0);
 
   const importFiles = useCallback(
@@ -155,6 +160,16 @@ export default function App() {
           await saveSettings(s);
           setToast('Signed in with OpenRouter.');
           setView({ name: 'settings' });
+          // Friends sign in from the live sync steps: take them back there.
+          if ((await loadPairing())?.groups.length) {
+            let tries = 0;
+            const go = () => {
+              const el = document.getElementById('live-sync');
+              if (el) setTimeout(() => el.scrollIntoView({ behavior: 'smooth' }), 300);
+              else if (++tries < 30) setTimeout(go, 100);
+            };
+            setTimeout(go, 100);
+          }
         }
       } catch (e) {
         setToast(e instanceof Error ? e.message : String(e));
@@ -367,7 +382,18 @@ export default function App() {
               setTimeout(() => document.getElementById('capture')?.scrollIntoView({ behavior: 'smooth' }), 50);
             }}
           />}
-        {view.name === 'chats' && <ChatList chats={chats} onImport={importFiles} onOpen={(id) => setView({ name: 'chat', id })} />}
+        {view.name === 'chats' && (
+          <ChatList
+            chats={chats}
+            syncOn={syncOn || chats.some((c) => c.auto)}
+            onImport={importFiles}
+            onOpen={(id) => setView({ name: 'chat', id })}
+            onLiveSync={() => {
+              setView({ name: 'settings' });
+              setTimeout(() => document.getElementById('live-sync')?.scrollIntoView({ behavior: 'smooth' }), 100);
+            }}
+          />
+        )}
         {view.name === 'chat' && (
           <ChatView
             key={`${view.id}-${importTick}`}
@@ -435,7 +461,19 @@ function CaptureHint({ onOpen }: { onOpen: () => void }) {
 
 // ---------------- Chat list ----------------
 
-function ChatList({ chats, onImport, onOpen }: { chats: StoredChat[]; onImport: (f: File[]) => void; onOpen: (id: string) => void }) {
+function ChatList({
+  chats,
+  syncOn,
+  onImport,
+  onOpen,
+  onLiveSync,
+}: {
+  chats: StoredChat[];
+  syncOn: boolean;
+  onImport: (f: File[]) => void;
+  onOpen: (id: string) => void;
+  onLiveSync: () => void;
+}) {
   const input = useRef<HTMLInputElement>(null);
   const [drag, setDrag] = useState(false);
   const [showQuiet, setShowQuiet] = useState(false);
@@ -444,85 +482,115 @@ function ChatList({ chats, onImport, onOpen }: { chats: StoredChat[]; onImport: 
   const sorted = [...chats].sort((a, b) => lastOf(b) - lastOf(a) || b.importedAt - a.importedAt);
   const split = splitActive(sorted, lastOf);
   const list = showQuiet ? sorted : split.shown;
+  const importBox = (
+        <div
+          className={drag ? 'drop on' : 'drop'}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDrag(true);
+          }}
+          onDragLeave={() => setDrag(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDrag(false);
+            onImport([...e.dataTransfer.files]);
+          }}
+        >
+          <h2>Add a group</h2>
+          <p className="muted">
+            Import a WhatsApp chat export (.txt or .zip, several at once is fine). Exporting the same group again adds only the new messages. It stays on
+            this device.
+          </p>
+          <button className="primary" onClick={() => input.current?.click()}>
+            Import chat export
+          </button>
+          <input
+            ref={input}
+            type="file"
+            accept=".txt,.zip,text/plain,application/zip"
+            multiple
+            hidden
+            onChange={(e) => {
+              onImport([...(e.target.files ?? [])]);
+              e.target.value = '';
+            }}
+          />
+          {chats.length === 0 ? (
+            <>
+              <h3>How to export a group</h3>
+              <ExportSteps />
+              <div className="row">
+                <OpenWhatsApp />
+              </div>
+            </>
+          ) : (
+            <details className="howto">
+              <summary>How to export a group from WhatsApp</summary>
+              <ExportSteps />
+            </details>
+          )}
+        </div>
+  );
+  const groupList = (
+    <>
+        {chats.length > 0 && <h2 className="list-title">Your groups</h2>}
+        <ul className="chats">
+          {list.map((c) => {
+            const first = c.messages[0]?.ts;
+            const last = c.messages[c.messages.length - 1]?.ts;
+            return (
+              <li key={c.id}>
+                <button onClick={() => onOpen(c.id)}>
+                  <span className="avatar">{c.name.slice(0, 1).toUpperCase()}</span>
+                  <span className="grow">
+                    <span className="name">{c.name}</span>
+                    <span className="muted small">
+                      {c.messages.length ? `${c.messages.length} messages · ${fmtDay(first!)} to ${fmtDay(last!)}` : 'Messages cleared, digests kept'}
+                    </span>
+                  </span>
+                  <span className="chev">›</span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+        {split.hidden.length > 0 && (
+          <p className="small muted">
+            {showQuiet ? '' : `${split.hidden.length} group${split.hidden.length === 1 ? '' : 's'} with no messages in the last month ${split.hidden.length === 1 ? 'is' : 'are'} hidden. `}
+            <button className="link inline small" onClick={() => setShowQuiet(!showQuiet)}>
+              {showQuiet ? 'Hide quiet groups' : `Show ${split.hidden.length === 1 ? 'it' : 'them'}`}
+            </button>
+          </p>
+        )}
+    </>
+  );
+  if (syncOn)
+    return (
+      <section>
+        {chats.length === 0 ? (
+          <div className="card">
+            <h2>Your groups</h2>
+            <p className="muted small">
+              Messages from the groups you ticked in Live sync show up here by themselves, usually within a minute or two. Leave the app open for
+              a moment the first time.
+            </p>
+            <div className="row">
+              <button onClick={onLiveSync}>Open Live sync</button>
+            </div>
+          </div>
+        ) : (
+          groupList
+        )}
+        <details className="howto">
+          <summary>Add a group from a chat export instead</summary>
+          {importBox}
+        </details>
+      </section>
+    );
   return (
     <section>
-      <div
-        className={drag ? 'drop on' : 'drop'}
-        onDragOver={(e) => {
-          e.preventDefault();
-          setDrag(true);
-        }}
-        onDragLeave={() => setDrag(false)}
-        onDrop={(e) => {
-          e.preventDefault();
-          setDrag(false);
-          onImport([...e.dataTransfer.files]);
-        }}
-      >
-        <h2>Add a group</h2>
-        <p className="muted">
-          Import a WhatsApp chat export (.txt or .zip, several at once is fine). Exporting the same group again adds only the new messages. It stays on
-          this device.
-        </p>
-        <button className="primary" onClick={() => input.current?.click()}>
-          Import chat export
-        </button>
-        <input
-          ref={input}
-          type="file"
-          accept=".txt,.zip,text/plain,application/zip"
-          multiple
-          hidden
-          onChange={(e) => {
-            onImport([...(e.target.files ?? [])]);
-            e.target.value = '';
-          }}
-        />
-        {chats.length === 0 ? (
-          <>
-            <h3>How to export a group</h3>
-            <ExportSteps />
-            <div className="row">
-              <OpenWhatsApp />
-            </div>
-          </>
-        ) : (
-          <details className="howto">
-            <summary>How to export a group from WhatsApp</summary>
-            <ExportSteps />
-          </details>
-        )}
-      </div>
-
-      {chats.length > 0 && <h2 className="list-title">Your groups</h2>}
-      <ul className="chats">
-        {list.map((c) => {
-          const first = c.messages[0]?.ts;
-          const last = c.messages[c.messages.length - 1]?.ts;
-          return (
-            <li key={c.id}>
-              <button onClick={() => onOpen(c.id)}>
-                <span className="avatar">{c.name.slice(0, 1).toUpperCase()}</span>
-                <span className="grow">
-                  <span className="name">{c.name}</span>
-                  <span className="muted small">
-                    {c.messages.length ? `${c.messages.length} messages · ${fmtDay(first!)} to ${fmtDay(last!)}` : 'Messages cleared, digests kept'}
-                  </span>
-                </span>
-                <span className="chev">›</span>
-              </button>
-            </li>
-          );
-        })}
-      </ul>
-      {split.hidden.length > 0 && (
-        <p className="small muted">
-          {showQuiet ? '' : `${split.hidden.length} group${split.hidden.length === 1 ? '' : 's'} with no messages in the last month ${split.hidden.length === 1 ? 'is' : 'are'} hidden. `}
-          <button className="link inline small" onClick={() => setShowQuiet(!showQuiet)}>
-            {showQuiet ? 'Hide quiet groups' : `Show ${split.hidden.length === 1 ? 'it' : 'them'}`}
-          </button>
-        </p>
-      )}
+      {importBox}
+      {groupList}
     </section>
   );
 }
@@ -631,7 +699,7 @@ function ChatView(props: {
         {chat.lastDigestEnd ? ` · last digest covered up to ${fmtDate(chat.lastDigestEnd)}` : ''}
       </p>
 
-      {!captureStatus()?.selected.includes(chat.name) && (
+      {!chat.auto && !captureStatus()?.selected.includes(chat.name) && (
         <UpdateNudge group={chat.name} lastTs={chat.messages[chat.messages.length - 1]?.ts} onPick={() => pick.current?.click()} />
       )}
       <input
@@ -673,7 +741,15 @@ function ChatView(props: {
             {settings.model ? `Using ${settings.model}` : 'Using the newest model (automatic)'}
           </span>
         </div>
-        {!selected.length && chat.messages.length > 0 && <p className="muted small">No new messages in this range. Import a newer export.</p>}
+        {!selected.length && chat.messages.length > 0 && (
+          <p className="muted small">
+            {chat.auto
+              ? range === 'since'
+                ? 'Nothing new since the last digest. New messages arrive by themselves; pick another range above to summarize older ones.'
+                : 'No messages in this range yet. New messages arrive by themselves.'
+              : 'No new messages in this range. Import a newer export.'}
+          </p>
+        )}
         {error && <ErrorBox message={error} />}
       </div>
 

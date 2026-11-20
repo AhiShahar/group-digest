@@ -319,7 +319,7 @@ export async function storeDigests(list: SyncedDigest[]): Promise<number> {
     const digest = { ...parsed.data, events: sanitizeEvents(parsed.data.events, x.from, x.to) };
     let chat = (await listChats()).find((c) => c.name === x.chat);
     if (!chat) {
-      chat = { id: newId(), name: x.chat, importedAt: Date.now(), messages: [], focus: '', lastDigestEnd: null };
+      chat = { id: newId(), name: x.chat, importedAt: Date.now(), messages: [], focus: '', lastDigestEnd: null, auto: true };
     }
     const rec: StoredDigest = {
       id: newId(),
@@ -332,7 +332,7 @@ export async function storeDigests(list: SyncedDigest[]): Promise<number> {
       digest,
     };
     await putDigest(rec);
-    await putChat({ ...chat, lastDigestEnd: Math.max(chat.lastDigestEnd ?? 0, x.to) });
+    await putChat({ ...chat, lastDigestEnd: Math.max(chat.lastDigestEnd ?? 0, x.to), auto: true });
     n++;
   }
   return n;
