@@ -19,6 +19,8 @@ import {
   savePairing,
   type BridgeState,
   type SyncPairing,
+  INVITE_DAYS,
+  inviteExpired,
 } from './lib/liveSync';
 import type { AppSettings } from './lib/store';
 import Scheduled, { AlertsToggle, RecentNotices } from './Scheduled';
@@ -136,19 +138,21 @@ function Friends({ p, st, onUpdate, onToast }: { p: SyncPairing; st: BridgeState
   const members = host.members;
   const used = new Set(members.map((m) => m.code));
   const pending = (p.invites ?? []).filter((i) => !used.has(i.code));
+  const open = pending.filter((i) => !inviteExpired(i));
   const from = st.me?.name ?? '';
   return (
     <>
       <h3>Friends on your server</h3>
       <p className="small muted">
-        Invite someone and they can link their own WhatsApp to your server with no setup. Each person's messages are encrypted for their phone
-        only: you can't read theirs and they can't read yours. {members.length} of {host.max} places used.
+        Invite someone and they can link their own WhatsApp to your server with no setup. Each person has their own link and key: their
+        messages go to their phone only and never show in your app. You see their name and, if they allow it, whether they are linked.{' '}
+        {members.length} of {host.max} places used.
       </p>
       <div className="row">
         <input placeholder="Friend's name" value={name} onChange={(e) => setName(e.target.value)} style={{ flex: 1, minWidth: 140 }} />
         <button
           className="primary"
-          disabled={!name.trim() || members.length + pending.length >= host.max}
+          disabled={!name.trim() || members.length + open.length >= host.max}
           onClick={async () => {
             const inv = newInvite(name);
             const next = { ...p, host: { inbox: host.inbox, pub: host.pub }, invites: [...(p.invites ?? []), inv] };
@@ -170,17 +174,7 @@ function Friends({ p, st, onUpdate, onToast }: { p: SyncPairing; st: BridgeState
           Create invite
         </button>
       </div>
-      {lastLink && (
-        <>
-          <pre className="sync-code" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontSize: 12, userSelect: 'all' }}>
-            {lastLink}
-          </pre>
-          <p className="small muted">Send this link to your friend. It works once. Anyone with the link can use it, so send it privately.</p>
-          <div className="row">
-            <Copy text={lastLink} label="Copy link" onToast={onToast} />
-          </div>
-        </>
-      )}
+      {lastLink && <InviteShare link={lastLink} from={from} onToast={onToast} />}
       {(members.length > 0 || pending.length > 0) && (
         <ul className="groups">
           {members.map((m) => (
@@ -188,7 +182,16 @@ function Friends({ p, st, onUpdate, onToast }: { p: SyncPairing; st: BridgeState
               <span>
                 {m.name || 'Friend'}{' '}
                 <span className="muted small">
-                  · {m.status === 'connected' ? 'linked' : m.status === 'qr' ? 'scanning QR' : m.status}
+                  ·{' '}
+                  {m.status === 'hidden'
+                    ? 'keeps their status private'
+                    : m.status === 'connected'
+                      ? 'linked'
+                      : m.status === 'qr' || m.status === 'code'
+                        ? 'linking'
+                        : m.status === 'unlinked'
+                          ? 'not linked yet'
+                          : m.status}
                   {m.lastMessageAt ? ` · last sync ${ago(m.lastMessageAt)}` : ''}
                 </span>
               </span>
@@ -207,11 +210,16 @@ function Friends({ p, st, onUpdate, onToast }: { p: SyncPairing; st: BridgeState
           {pending.map((i) => (
             <li key={i.code} className="row" style={{ justifyContent: 'space-between' }}>
               <span>
-                {i.name || 'Invite'} <span className="muted small">· invite not used yet</span>
+                {i.name || 'Invite'}{' '}
+                <span className="muted small">
+                  · {inviteExpired(i) ? 'invite expired' : `invite not used yet, works for ${Math.max(1, Math.ceil((i.createdAt + INVITE_DAYS * 864e5 - Date.now()) / 864e5))} more day(s)`}
+                </span>
               </span>
               <span className="row">
-                <Copy text={inviteLink(p.host ? p : { ...p, host }, i, from)} label="Copy link" onToast={onToast} />
-                <button onClick={() => onUpdate({ ...p, invites: (p.invites ?? []).filter((x) => x.code !== i.code) })}>Cancel</button>
+                {!inviteExpired(i) && <button onClick={() => setLastLink(inviteLink(p.host ? p : { ...p, host }, i, from))}>Share again</button>}
+                <button onClick={() => onUpdate({ ...p, invites: (p.invites ?? []).filter((x) => x.code !== i.code) })}>
+                  {inviteExpired(i) ? 'Remove' : 'Cancel'}
+                </button>
               </span>
             </li>
           ))}
@@ -223,7 +231,7 @@ function Friends({ p, st, onUpdate, onToast }: { p: SyncPairing; st: BridgeState
 
 function PhoneLink({ p, st, member, onUpdate }: { p: SyncPairing; st: BridgeState; member: boolean; onUpdate: (p: SyncPairing) => Promise<void> }) {
   const [phone, setPhone] = useState(p.pairPhone ?? '');
-  const [open, setOpen] = useState(st.status === 'code');
+  const [open, setOpen] = useState(st.status === 'code' || (member && /Android|iPhone|iPad/i.test(navigator.userAgent)));
   const [asked, setAsked] = useState(false);
   if (st.version < '0.3.0') {
     return member ? null : (
@@ -264,14 +272,90 @@ function PhoneLink({ p, st, member, onUpdate }: { p: SyncPairing; st: BridgeStat
   );
 }
 
+function InviteShare({ link, from, onToast }: { link: string; from: string; onToast: (s: string) => void }) {
+  const text = `${from ? `${from} invited you` : "You're invited"} to Group Digest live sync. Open this link on your phone: ${link}`;
+  return (
+    <div className="card" style={{ marginTop: 8 }}>
+      <p className="small">
+        <b>Send this to your friend.</b> They open it on their phone, type their name, and link WhatsApp there. It works once, for {INVITE_DAYS}{' '}
+        days. Anyone with the link can use it, so send it privately.
+      </p>
+      <div className="row">
+        <a className="btn primary" style={{ textDecoration: "none" }} href={`https://wa.me/?text=${encodeURIComponent(text)}`} target="_blank" rel="noreferrer">
+          Send on WhatsApp
+        </a>
+        <Copy text={link} label="Copy link" onToast={onToast} />
+        {typeof navigator.share === 'function' && (
+          <button
+            onClick={() =>
+              navigator.share({ title: 'Group Digest invite', text }).catch(() => {
+                /* closed */
+              })
+            }
+          >
+            Share…
+          </button>
+        )}
+      </div>
+      <p className="small muted">Or, if they are next to you, they can scan this with their phone camera:</p>
+      <Qr value={link} />
+    </div>
+  );
+}
+
+/** What a friend's host can and cannot see, and the switch for link status. */
+function MemberPrivacy({ p, onUpdate }: { p: SyncPairing; onUpdate: (p: SyncPairing) => Promise<void> }) {
+  const host = p.hostName || 'your friend';
+  const showStatus = p.share?.status !== false;
+  return (
+    <details className="small">
+      <summary>What {host} can see</summary>
+      <ul>
+        <li>Your name{showStatus ? ', whether your WhatsApp is linked, and when your messages last synced' : ' and that you joined'}.</li>
+        <li>Not your groups, messages, digests or AI key: those are encrypted for this phone and never show in {host}'s app.</li>
+        <li>
+          The server runs on {host}'s cloud machine, which links your WhatsApp the way WhatsApp Web does. Only join a server of someone you
+          trust, and press Leave any time to unlink and delete your data from it.
+        </li>
+      </ul>
+      <label className="check">
+        <input type="checkbox" checked={showStatus} onChange={(e) => onUpdate({ ...p, share: { status: e.target.checked } })} />
+        Let {host} see my link status and last sync (helps them spot problems)
+      </label>
+    </details>
+  );
+}
+
+/** A friend's first steps after joining, until the basics are done. */
+function MemberSteps({ p, st, settingsReady }: { p: SyncPairing; st: BridgeState | null; settingsReady: boolean }) {
+  const steps = [
+    { done: true, text: 'Join' },
+    { done: st?.status === 'connected', text: 'Link your WhatsApp (below)' },
+    { done: p.groups.length > 0, text: 'Tick the groups to sync' },
+    { done: settingsReady, text: 'Connect a free AI at the top of this page' },
+  ];
+  if (steps.every((x) => x.done)) return null;
+  return (
+    <ol className="small steps">
+      {steps.map((x, i) => (
+        <li key={i} className={x.done ? 'muted' : ''}>
+          {x.done ? '✓ ' : ''}
+          {x.text}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 function JoinCard({ inv, onJoined, onToast }: { inv: ParsedInvite; onJoined: (p: SyncPairing) => void; onToast: (s: string) => void }) {
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   return (
     <>
       <p className="small">
-        <b>{inv.from || 'A friend'}</b> invited you to live sync. Link your WhatsApp once with a QR code and messages from the groups you choose
-        flow into this app automatically. Your messages are encrypted for this phone only; {inv.from || 'your friend'} can't read them.
+        <b>{inv.from || 'A friend'}</b> invited you to live sync. Link your WhatsApp once and messages from the groups you choose flow into
+        this app automatically, with no setup. They are encrypted on the way to this phone and never show in {inv.from || 'your friend'}'s app.
+        The link runs on {inv.from || 'your friend'}'s cloud machine, so join only if you trust them; you can leave any time.
       </p>
       <p className="small muted">
         This uses an unofficial WhatsApp connection. WhatsApp could in rare cases restrict an account that uses one.
@@ -304,6 +388,7 @@ function JoinCard({ inv, onJoined, onToast }: { inv: ParsedInvite; onJoined: (p:
 }
 
 export default function LiveSync({ settings, onToast, onSynced }: { settings: AppSettings; onToast: (s: string) => void; onSynced: () => void }) {
+  const settingsReady = settings.provider === 'compatible' || !!settings.apiKey;
   const [p, setP] = useState<SyncPairing | null | undefined>(undefined);
   const [st, setSt] = useState<BridgeState | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -432,6 +517,8 @@ export default function LiveSync({ settings, onToast, onSynced }: { settings: Ap
               </p>
             )}
             {st?.error && <p className="small warn">{st.error}</p>}
+            {member && <MemberSteps p={p} st={st} settingsReady={settingsReady} />}
+            {member && <MemberPrivacy p={p} onUpdate={update} />}
             {!member && st && st.status !== 'removed' && st.version >= '0.4.2' && (
               <p className="small muted">
                 {st.backupAt ? `Server backup saved ${ago(st.backupAt)}: if the VM is ever lost, a new one made with the same setup script restores your WhatsApp link and friends.` : 'The server saves a backup of its WhatsApp link and friends about 10 minutes after it starts, then daily.'}

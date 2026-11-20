@@ -83,6 +83,8 @@ Each person's data and key stay on their own device, so testers do not see each 
 
 **Backups:** with live sync set up, the app backs up its data (groups, messages, digests, settings, pairing) about once a day when opened, gzipped and sealed with the pairing key, to the relay room (`/backup`, parts of 120 KB, only the last committed copy kept). Settings > Backup shows the recovery key (`gd1-<room>-<secret>`), which restores everything on a new phone. The sync server backs up its own data directory (WhatsApp links, invite key, friends; not message archives) daily and after links or joins; a fresh VM made with the same setup script restores it on first start (`public/bridge/backup.mjs`).
 
+**Friends:** Live sync > Friends on your server > Create invite gives a one-time link that works for 7 days, with Send on WhatsApp, Copy and a QR code to scan. The friend opens it on their phone, types their name and links WhatsApp (phone-number code by default on phones), then follows a short checklist. Each friend sees exactly what the owner can see, and can hide their link status and last sync from the owner.
+
 Settings > **Live sync from WhatsApp** links WhatsApp once by QR code, like WhatsApp Web, and new messages from the groups you tick flow into the app on any phone, iPhone included. Unofficial: WhatsApp may restrict accounts that use it, so start with your own number.
 
 ```

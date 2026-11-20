@@ -35,7 +35,7 @@ import makeWASocket, { Browsers, DisconnectReason, fetchLatestBaileysVersion, us
 import { deriveKeys, hostInbox, importHostKey, newHostKey, open, openSealed, seal } from './crypto.mjs';
 import { toRecord } from './parse.mjs';
 
-const VERSION = '0.4.2';
+const VERSION = '0.4.3';
 const SELF = fileURLToPath(import.meta.url);
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 
@@ -120,6 +120,7 @@ async function main() {
   const LINK_WINDOW_MS = 10 * 60e3; // show QR codes for 10 minutes after the app asks
   const HISTORY_KEEP_MS = 60 * 60e3; // recent history from linking, kept in memory for an hour
   const HISTORY_MAX = 3000;
+  const INVITE_DAYS = 7;
   const MAX_USERS = Number(process.env.GD_MAX_USERS) || Math.max(1, Math.min(300, Math.floor((memMb - 350) / 110)));
   const quiet = pino({ level: process.env.GD_DEBUG ? 'debug' : 'silent' });
 
@@ -446,6 +447,9 @@ async function main() {
         }
         writeFileSync(join(this.dir, 'unlink-seen'), String(this.unlinkSeen));
         if (!this.owner && c.leave) await host.remove(this.room, 'left');
+        const share = c.share?.status !== false;
+        if (!this.owner && this.lastShare !== undefined && share !== this.lastShare) sessions.get(cfg.room)?.pushState();
+        this.lastShare = share;
         if (this.owner) await host.ownerConfig(c);
       } catch (e) {
         log(this.label(), 'config poll failed:', e.message);
@@ -728,14 +732,18 @@ async function main() {
         inbox: this.inbox,
         pub: this.pub,
         max: MAX_USERS,
-        members: this.friends().map((s) => ({
-          room: s.room,
-          name: s.name,
-          code: s.code,
-          joinedAt: s.joinedAt,
-          status: s.state.status,
-          lastMessageAt: s.state.lastMessageAt,
-        })),
+        // Each friend chooses whether the owner sees their link status and last sync.
+        members: this.friends().map((s) => {
+          const show = s.config.share?.status !== false;
+          return {
+            room: s.room,
+            name: s.name,
+            code: s.code,
+            joinedAt: s.joinedAt,
+            status: show ? s.state.status : 'hidden',
+            lastMessageAt: show ? s.state.lastMessageAt : 0,
+          };
+        }),
       };
     },
 
@@ -793,6 +801,7 @@ async function main() {
       if (sessions.has(note.room)) return sessions.get(note.room).pollConfig(); // already in
       const invite = this.invites.find((i) => i.code === note.code);
       if (!invite) return this.refuse(note, 'This invite is not valid any more. Ask for a new one.');
+      if (Date.now() - (Number(invite.createdAt) || 0) > INVITE_DAYS * 864e5) return this.refuse(note, 'This invite has expired. Ask for a new one.');
       if (this.friends().some((s) => s.code === note.code)) return this.refuse(note, 'This invite was already used. Ask for a new one.');
       if (this.friends().length >= MAX_USERS) return this.refuse(note, 'This sync server is full right now.');
       const name = String(note.name || invite.name || '').slice(0, 60) || null;
