@@ -16,6 +16,8 @@ import {
 
 import type { ProviderSettings } from './providerInfo';
 import { isModelGone, rankModels } from './models';
+import { z } from 'zod';
+import { ASK_HINT, ASK_SYSTEM, AnswerSchema, type Answer } from './ask';
 export type { ProviderSettings };
 
 // Claude models that accept server-side fallbacks on refusal.
@@ -60,15 +62,22 @@ export async function listModels(s: ProviderSettings): Promise<string[]> {
 
 // ---------- one call ----------
 
-async function callOnce(s: ProviderSettings, system: string, user: string, retryNote?: string): Promise<unknown> {
+/** What the model must return: a zod schema (Claude enforces it) and a text hint for the others. */
+interface Shape {
+  schema: z.ZodType;
+  hint: string;
+}
+const DIGEST_SHAPE: Shape = { schema: DigestSchema, hint: SCHEMA_HINT };
+
+async function callOnce(s: ProviderSettings, system: string, user: string, retryNote?: string, shape: Shape = DIGEST_SHAPE): Promise<unknown> {
   const userText = retryNote ? `${user}\n\n${retryNote}` : user;
   switch (s.provider) {
     case 'anthropic':
-      return callAnthropic(s, system, userText);
+      return callAnthropic(s, system, userText, shape);
     case 'gemini':
-      return callGemini(s, system, userText);
+      return callGemini(s, system, userText, shape);
     default:
-      return callOpenAiCompatible(s, system, userText);
+      return callOpenAiCompatible(s, system, userText, shape);
   }
 }
 
@@ -77,7 +86,7 @@ function anthropicClient(s: ProviderSettings) {
   return new Anthropic({ apiKey: s.apiKey, dangerouslyAllowBrowser: true });
 }
 
-async function callAnthropic(s: ProviderSettings, system: string, user: string): Promise<unknown> {
+async function callAnthropic(s: ProviderSettings, system: string, user: string, shape: Shape): Promise<unknown> {
   const client = anthropicClient(s);
   const useFallbacks = FALLBACK_MODELS.test(s.model);
   const stream = client.beta.messages.stream({
@@ -85,7 +94,7 @@ async function callAnthropic(s: ProviderSettings, system: string, user: string):
     max_tokens: 32000,
     system,
     messages: [{ role: 'user', content: user }],
-    output_config: { effort: 'low', format: betaZodOutputFormat(DigestSchema) },
+    output_config: { effort: 'low', format: betaZodOutputFormat(shape.schema as typeof DigestSchema) },
     ...(useFallbacks ? { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' as const } : {}),
   });
   const msg = await stream.finalMessage();
@@ -99,13 +108,13 @@ async function callAnthropic(s: ProviderSettings, system: string, user: string):
   return extractJson(text);
 }
 
-async function callGemini(s: ProviderSettings, system: string, user: string): Promise<unknown> {
+async function callGemini(s: ProviderSettings, system: string, user: string, shape: Shape): Promise<unknown> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(s.model)}:generateContent?key=${encodeURIComponent(s.apiKey)}`;
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      systemInstruction: { parts: [{ text: `${system}\n\n${SCHEMA_HINT}` }] },
+      systemInstruction: { parts: [{ text: `${system}\n\n${shape.hint}` }] },
       contents: [{ role: 'user', parts: [{ text: user }] }],
       generationConfig: { responseMimeType: 'application/json' },
     }),
@@ -130,11 +139,11 @@ function bearer(s: ProviderSettings): Record<string, string> {
   return s.apiKey ? { authorization: `Bearer ${s.apiKey}` } : {};
 }
 
-async function callOpenAiCompatible(s: ProviderSettings, system: string, user: string): Promise<unknown> {
+async function callOpenAiCompatible(s: ProviderSettings, system: string, user: string, shape: Shape): Promise<unknown> {
   const body: Record<string, unknown> = {
     model: s.model,
     messages: [
-      { role: 'system', content: `${system}\n\n${SCHEMA_HINT}` },
+      { role: 'system', content: `${system}\n\n${shape.hint}` },
       { role: 'user', content: user },
     ],
   };
@@ -254,4 +263,35 @@ export async function summarize(
   const merged = mergeDigests(parts);
   merged.events = sanitizeEvents(merged.events, msgs[0].ts, msgs[msgs.length - 1].ts);
   return merged;
+}
+
+// ---------- ask across groups ----------
+
+/** Answer a question from the given transcript. Tries the next model when one is gone. */
+export async function ask(s: ProviderSettings, user: string, onModel?: (m: string) => void): Promise<Answer> {
+  const order = await modelCandidates(s);
+  const shape: Shape = { schema: AnswerSchema, hint: ASK_HINT };
+  let last: unknown;
+  for (const model of order.slice(0, 4)) {
+    const cur = { ...s, model };
+    onModel?.(model);
+    try {
+      let raw: unknown;
+      try {
+        raw = await callOnce(cur, ASK_SYSTEM, user, undefined, shape);
+      } catch (e) {
+        if (!(e instanceof SyntaxError) && !String(e).includes('did not return JSON')) throw e;
+        raw = await callOnce(cur, ASK_SYSTEM, user, 'Your last reply was not valid JSON. Reply with only the JSON object.', shape);
+      }
+      const parsed = AnswerSchema.safeParse(raw);
+      if (parsed.success) return parsed.data;
+      const r = raw as { answer?: unknown };
+      if (typeof r?.answer === 'string') return { answer: r.answer, sources: [] };
+      throw new Error('The AI answered in an unexpected shape.');
+    } catch (e) {
+      last = e;
+      if (!isModelGone(e)) throw e;
+    }
+  }
+  throw last;
 }

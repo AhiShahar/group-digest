@@ -220,3 +220,15 @@ button.on-chip { background: var(--brand-soft); color: var(--brand); }
 .nudge { display: flex; flex-direction: column; gap: 4px; background: color-mix(in srgb, var(--dot-3) 12%, var(--card)); }
 .nudge .steps { margin: 6px 0 0; font-size: 14.5px; }
 .drop h3 { margin-top: 14px; }
+
+/* Across groups: search hits, answers, plain lists */
+.hits { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 8px; }
+.hits button { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; width: 100%; text-align: start; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px; color: var(--text); font-weight: 400; }
+.hit-text { white-space: pre-line; overflow-wrap: anywhere; }
+mark { background: color-mix(in srgb, var(--brand) 28%, transparent); color: inherit; border-radius: 4px; padding: 0 2px; }
+.answer { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.answer p { margin: 0 0 8px; }
+ul.card.plain { list-style: none; padding: 8px 14px; }
+ul.card.plain li { padding: 6px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+ul.card.plain li:last-child { border-bottom: 0; }
+ul.card.plain .check { align-items: flex-start; padding: 2px 0; }
