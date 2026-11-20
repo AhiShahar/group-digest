@@ -8,6 +8,7 @@ This is the phase 1 test build from the [design proposal](https://claude.ai/arti
 - **Summarize** with the AI the user picks: headline, key points, decisions, to-dos, open questions and possible events.
 - **Add events** to Google Calendar, Outlook, or Apple Calendar (`.ics`), one at a time or all at once. Nothing is added without a tap.
 - **Reminders** for each event, set in AI and settings (how far ahead, and how often to repeat). Calendar files (.ics) carry them as alarms, so they work on iPhone too; the Android app can also post its own notifications (Remind me). Google and Outlook links use the calendar's default reminder. On the website, Remind me uses Web Push through this site's Worker (`worker/push.ts`): only the event title and time are sent, one Durable Object per browser wakes itself when a reminder is due, and the VAPID keys are created automatically on first use. iPhone needs the app on the Home Screen (iOS 16.4+).
+- **Ask across groups** (Ask tab): instant search over every stored group (Hebrew prefixes match too), "Ask the AI" with answers and sources (only messages matching the question's words, plus a little context, go to the AI), and an overview of upcoming dates, open to-dos (tick them off) and recent decisions from the last three weeks of digests.
 - **Share** the summary back to WhatsApp or anywhere else.
 - **Android share-to-app:** after installing, WhatsApp > Export chat > Group Digest imports the chat directly.
 

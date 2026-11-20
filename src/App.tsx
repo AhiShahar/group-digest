@@ -3,6 +3,7 @@ import { buildIcs, downloadFile, googleCalendarUrl, outlookCalendarUrl, safeFile
 import type { Digest, DigestEvent } from './lib/digest';
 import LiveSync from './LiveSync';
 import Backup from './Backup';
+import Across from './Across';
 import { autoBackup } from './lib/backup';
 import { fetchNotices, lastDigests, loadPairing, pullMessages, pushConfig, savePairing, type SyncNotice } from './lib/liveSync';
 import { openProblem, refreshAndroidWatch } from './lib/schedule';
@@ -38,7 +39,7 @@ import {
   type StoredDigest,
 } from './lib/store';
 
-type View = { name: 'chats' } | { name: 'chat'; id: string } | { name: 'settings' };
+type View = { name: 'chats' } | { name: 'chat'; id: string } | { name: 'settings' } | { name: 'across' };
 
 const fmtDate = (ts: number) =>
   new Date(ts).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
@@ -305,8 +306,11 @@ export default function App() {
           <span>Group Digest</span>
         </button>
         <nav>
-          <button className={view.name !== 'settings' ? 'tab on' : 'tab'} onClick={() => setView({ name: 'chats' })}>
+          <button className={view.name === 'chats' || view.name === 'chat' ? 'tab on' : 'tab'} onClick={() => setView({ name: 'chats' })}>
             Chats
+          </button>
+          <button className={view.name === 'across' ? 'tab on' : 'tab'} onClick={() => setView({ name: 'across' })}>
+            Ask
           </button>
           <button className={view.name === 'settings' ? 'tab on' : 'tab'} onClick={() => setView({ name: 'settings' })}>
             AI and settings
@@ -372,6 +376,9 @@ export default function App() {
             onToast={setToast}
             onNeedSetup={() => setView({ name: 'settings' })}
           />
+        )}
+        {view.name === 'across' && (
+          <Across chats={chats} settings={settings} onOpen={(id) => setView({ name: 'chat', id })} onNeedSetup={() => setView({ name: 'settings' })} />
         )}
         {view.name === 'settings' && <Settings settings={settings} chats={chats} onChange={updateSettings} onToast={setToast} onWiped={refreshChats} />}
       </main>
