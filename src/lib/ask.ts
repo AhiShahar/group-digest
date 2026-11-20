@@ -1,7 +1,7 @@
 // Across groups: search every stored group, ask the AI a question about them,
 // and gather open to-dos, upcoming dates and recent decisions from digests.
 import { z } from 'zod';
-import { formatTranscript, type DigestEvent } from './digest';
+import { formatTranscript, type Decision, type DigestEvent } from './digest';
 import type { ChatMessage } from './parser';
 import type { StoredChat, StoredDigest } from './store';
 
@@ -148,7 +148,7 @@ export interface DateItem {
 export interface Overview {
   todos: TodoItem[];
   dates: DateItem[];
-  decisions: { chatId: string; chat: string; text: string; at: number }[];
+  decisions: { chatId: string; chat: string; d: Decision; at: number }[];
 }
 
 const norm = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
@@ -174,12 +174,15 @@ export function overview(chats: StoredChat[], digests: StoredDigest[], today: st
       const key = `${d.chatId}|${norm(e.title)}`;
       dates.set(key, { key, chatId: d.chatId, chat, e });
     }
-    for (const text of d.digest.decisions) decisions.push({ chatId: d.chatId, chat, text, at: d.createdAt });
+    for (const x of d.digest.decisions) decisions.push({ chatId: d.chatId, chat, d: x, at: d.createdAt });
   }
   const byDue = (a: TodoItem, b: TodoItem) => (a.due ?? '9999').localeCompare(b.due ?? '9999') || b.from - a.from;
   return {
     todos: [...todos.values()].sort(byDue),
     dates: [...dates.values()].sort((a, b) => (a.e.date + (a.e.start_time ?? '')).localeCompare(b.e.date + (b.e.start_time ?? ''))),
-    decisions: decisions.sort((a, b) => b.at - a.at).slice(0, 15),
+    // Newest digest first; a decision repeated in a later digest shows once.
+    decisions: [...new Map(decisions.sort((a, b) => b.at - a.at).reverse().map((x) => [`${x.chatId}|${norm(x.d.what)}`, x])).values()]
+      .sort((a, b) => b.at - a.at)
+      .slice(0, 15),
   };
 }

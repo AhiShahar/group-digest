@@ -17,6 +17,8 @@ import { ExportSteps, OpenWhatsApp, UpdateNudge } from './ExportHelp';
 import { DEFAULT_REMINDERS } from './lib/reminders';
 import { disablePush } from './lib/webpush';
 import { splitActive } from './lib/active';
+import { decisionText } from './lib/decisions';
+import { DecisionCards } from './Decisions';
 import { RemindAllButton, ReminderButton, ReminderSettings, RemindersContext, useReminderPrefs } from './Reminders';
 
 const providers = () => import('./lib/providers');
@@ -698,7 +700,7 @@ function digestAsText(chatName: string, d: Digest): string {
   return (
     `*${chatName}*: ${d.headline}\n` +
     sec('Key points', d.key_points) +
-    sec('Decisions', d.decisions) +
+    sec('Decisions', d.decisions.map(decisionText)) +
     sec(
       'To do',
       d.action_items.map((a) => `${a.task}${a.owner ? ` (${a.owner})` : ''}${a.due ? `, by ${a.due}` : ''}`),
@@ -772,7 +774,12 @@ function DigestCard({ rec, chatName, open, onToast }: { rec: StoredDigest; chatN
         </span>
       </summary>
       <List title="Key points" items={d.key_points} />
-      <List title="Decisions" items={d.decisions} />
+      {d.decisions.length > 0 && (
+        <>
+          <h3>Decisions</h3>
+          <DecisionCards rows={d.decisions.map((x) => ({ d: x }))} />
+        </>
+      )}
       {d.action_items.length > 0 && (
         <>
           <h3>To do</h3>

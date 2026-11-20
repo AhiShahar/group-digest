@@ -15,6 +15,7 @@ import {
 } from './digest';
 
 import type { ProviderSettings } from './providerInfo';
+import { upgradeDigest } from './decisions';
 import { isModelGone, rankModels } from './models';
 import { z } from 'zod';
 import { ASK_HINT, ASK_SYSTEM, AnswerSchema, type Answer } from './ask';
@@ -192,7 +193,7 @@ async function digestOnce(s: ProviderSettings, user: string): Promise<Digest> {
     if (!(e instanceof SyntaxError) && !String(e).includes('did not return JSON')) throw e;
     raw = await callOnce(s, SYSTEM_PROMPT, user, 'Your last reply was not valid JSON. Reply with only the JSON object.');
   }
-  const parsed = DigestSchema.safeParse(raw);
+  const parsed = DigestSchema.safeParse(upgradeDigest(raw));
   if (parsed.success) return parsed.data;
   // Weaker models: retry once with the validation errors.
   const retry = await callOnce(
@@ -204,7 +205,7 @@ async function digestOnce(s: ProviderSettings, user: string): Promise<Digest> {
       .map((i) => `${i.path.join('.')}: ${i.message}`)
       .join('; ')}. Reply with only a corrected JSON object.`,
   );
-  return DigestSchema.parse(retry);
+  return DigestSchema.parse(upgradeDigest(retry));
 }
 
 const listCache = new Map<string, string[]>();

@@ -3,6 +3,7 @@
 // of messages there; this pulls, decrypts and stores them, then deletes them
 // from the relay. Nothing here can be read by the relay.
 import { DigestSchema, sanitizeEvents, type Digest } from './digest';
+import { upgradeDigest } from './decisions';
 import type { ProviderSettings } from './providerInfo';
 import { getKv, listChats, loadSettings, newId, putChat, putDigest, setKv, storeCaptured, type StoredDigest } from './store';
 import { deriveKeys, newInviteCode, newPairing, open, seal, sealTo, type SyncKeys } from './syncCrypto';
@@ -313,7 +314,7 @@ export async function pullMessages(p: SyncPairing): Promise<number> {
 export async function storeDigests(list: SyncedDigest[]): Promise<number> {
   let n = 0;
   for (const x of list) {
-    const parsed = DigestSchema.safeParse(x.digest);
+    const parsed = DigestSchema.safeParse(upgradeDigest(x.digest));
     if (!parsed.success || !x.chat) continue;
     const digest = { ...parsed.data, events: sanitizeEvents(parsed.data.events, x.from, x.to) };
     let chat = (await listChats()).find((c) => c.name === x.chat);

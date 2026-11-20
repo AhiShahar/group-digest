@@ -2,6 +2,7 @@
 // upcoming dates and recent decisions gathered from every group's digests.
 import { useEffect, useMemo, useState } from 'react';
 import { askContext, askPrompt, overview, search, type Answer } from './lib/ask';
+import { DecisionCards } from './Decisions';
 import { providerInfo } from './lib/providerInfo';
 import { allDigests, getKv, setKv, type AppSettings, type StoredChat, type StoredDigest } from './lib/store';
 
@@ -168,16 +169,12 @@ export default function Across({
           {ov.dates.length ? (
             <ul className="card plain">
               {ov.dates.slice(0, 20).map((d) => (
-                <li key={d.key}>
+                <li key={d.key} className="when-row">
                   <button className="link inline" onClick={() => onOpen(d.chatId)}>
                     <b>{day(d.e.date)}</b>
                     {d.e.start_time ? ` ${d.e.start_time}` : ''} · {d.e.title}
                   </button>
-                  <span className="small muted">
-                    {' '}
-                    · {d.chat}
-                    {d.e.location ? ` · ${d.e.location}` : ''}
-                  </span>
+                  <span className="small muted sub" dir="auto">{[d.e.location, d.chat].filter(Boolean).join(' · ')}</span>
                 </li>
               ))}
             </ul>
@@ -225,13 +222,7 @@ export default function Across({
           {ov.decisions.length > 0 && (
             <>
               <h2>Recent decisions</h2>
-              <ul className="card plain">
-                {ov.decisions.map((d, i) => (
-                  <li key={i}>
-                    {d.text} <span className="small muted">· {d.chat}</span>
-                  </li>
-                ))}
-              </ul>
+              <DecisionCards rows={ov.decisions.map((x) => ({ d: x.d, group: x.chat, onOpenGroup: () => onOpen(x.chatId) }))} />
             </>
           )}
         </>
