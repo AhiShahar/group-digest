@@ -26,6 +26,10 @@ import {
 import type { AppSettings } from './lib/store';
 import Scheduled, { AlertsToggle, RecentNotices } from './Scheduled';
 import { turnOffNotices } from './lib/schedule';
+import { startOpenRouterSignIn } from './lib/openrouter';
+
+/** On a phone, linking the same phone by number beats scanning a QR code with it. */
+const onPhone = typeof navigator !== 'undefined' && /Android|iPhone|iPad/i.test(navigator.userAgent);
 
 type Host = 'oracle' | 'google' | 'computer';
 
@@ -232,7 +236,7 @@ function Friends({ p, st, onUpdate, onToast }: { p: SyncPairing; st: BridgeState
 
 function PhoneLink({ p, st, member, onUpdate }: { p: SyncPairing; st: BridgeState; member: boolean; onUpdate: (p: SyncPairing) => Promise<void> }) {
   const [phone, setPhone] = useState(p.pairPhone ?? '');
-  const [open, setOpen] = useState(st.status === 'code' || (member && /Android|iPhone|iPad/i.test(navigator.userAgent)));
+  const [open, setOpen] = useState(st.status === 'code' || onPhone);
   const [asked, setAsked] = useState(false);
   if (st.version < '0.3.0') {
     return member ? null : (
@@ -333,18 +337,36 @@ function MemberSteps({ p, st, settingsReady }: { p: SyncPairing; st: BridgeState
     { done: true, text: 'Join' },
     { done: st?.status === 'connected', text: 'Link your WhatsApp (below)' },
     { done: p.groups.length > 0, text: 'Tick the groups to sync' },
-    { done: settingsReady, text: 'Connect a free AI at the top of this page' },
+    { done: settingsReady, text: 'Connect a free AI' },
   ];
   if (steps.every((x) => x.done)) return null;
+  // The AI step gets its button right here once the WhatsApp steps are done, so nobody has to scroll to the top.
+  const aiNext = !settingsReady && steps[1].done && steps[2].done;
   return (
-    <ol className="small steps">
-      {steps.map((x, i) => (
-        <li key={i} className={x.done ? 'muted' : ''}>
-          {x.done ? '✓ ' : ''}
-          {x.text}
-        </li>
-      ))}
-    </ol>
+    <>
+      <ol className="small steps">
+        {steps.map((x, i) => (
+          <li key={i} className={x.done ? 'muted' : ''}>
+            {x.done ? '✓ ' : ''}
+            {x.text}
+          </li>
+        ))}
+      </ol>
+      {aiNext && (
+        <div className="card nudge">
+          <strong>Last step: connect a free AI</strong>
+          <span className="muted small">It writes your digests. Sign in or make a free OpenRouter account; no card needed.</span>
+          <div className="row">
+            <button className="primary" onClick={() => startOpenRouterSignIn()}>
+              Sign in with OpenRouter (free)
+            </button>
+            <button className="link" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
+              Other AI options
+            </button>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -541,7 +563,22 @@ export default function LiveSync({ settings, onToast, onSynced }: { settings: Ap
             {st?.status === 'unlinked' && <p className="small">Getting a QR code from the server…</p>}
             {st?.status === 'starting' && <p className="small">Connecting to WhatsApp…</p>}
 
-            {st?.status === 'qr' && st.qr && (
+            {st?.status === 'qr' && st.qr && onPhone && (
+              <>
+                <h3>{member ? 'Link WhatsApp' : '2. Link WhatsApp'}</h3>
+                <p className="small">Type this phone's WhatsApp number and tap Get a code. You then type that code into WhatsApp.</p>
+                <PhoneLink p={p} st={st} member={member} onUpdate={update} />
+                <details className="small">
+                  <summary>Linking a WhatsApp on another phone? Show the QR code</summary>
+                  <p className="small">
+                    On that phone open WhatsApp, then <b>Settings</b> (iPhone) or <b>⋮</b> (Android), <b>Linked devices</b>, <b>Link a device</b>,
+                    and scan this code.
+                  </p>
+                  <Qr value={st.qr} />
+                </details>
+              </>
+            )}
+            {st?.status === 'qr' && st.qr && !onPhone && (
               <>
                 <h3>{member ? 'Link WhatsApp' : '2. Link WhatsApp'}</h3>
                 <p className="small">
@@ -573,7 +610,7 @@ export default function LiveSync({ settings, onToast, onSynced }: { settings: Ap
               </>
             )}
 
-            {st && ['qr', 'code', 'unlinked'].includes(st.status) && (
+            {st && ['qr', 'code', 'unlinked'].includes(st.status) && !(onPhone && st.status === 'qr' && st.qr) && (
               <PhoneLink p={p} st={st} member={member} onUpdate={update} />
             )}
 
