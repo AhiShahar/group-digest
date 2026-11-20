@@ -21,7 +21,8 @@ import {
   type SyncPairing,
 } from './lib/liveSync';
 import type { AppSettings } from './lib/store';
-import Scheduled, { RecentNotices } from './Scheduled';
+import Scheduled, { AlertsToggle, RecentNotices } from './Scheduled';
+import { turnOffNotices } from './lib/schedule';
 
 type Host = 'oracle' | 'google' | 'computer';
 
@@ -374,6 +375,7 @@ export default function LiveSync({ settings, onToast, onSynced }: { settings: Ap
       // Tell the server to unlink (and, for a friend, to drop us), and delete undelivered messages.
       await update({ ...p!, groups: [], unlink: p!.unlink + 1, linkRequestedAt: 0, leave: member ? true : undefined });
       await dropPending(p!);
+      await turnOffNotices(p!);
     } catch {
       /* relay may already be gone */
     }
@@ -430,6 +432,7 @@ export default function LiveSync({ settings, onToast, onSynced }: { settings: Ap
               </p>
             )}
             {st?.error && <p className="small warn">{st.error}</p>}
+            {st && st.status !== 'removed' && <AlertsToggle p={p} member={member} onUpdate={update} onToast={onToast} />}
             {!member && st && st.version < '0.2.0' && (
               <p className="small warn">
                 Your server needs a one-time restart to get friend invites: in Oracle Cloud open your instance and press Reboot. It updates itself

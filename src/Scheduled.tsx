@@ -12,8 +12,9 @@ import {
 } from './lib/liveSync';
 import { providerInfo } from './lib/providerInfo';
 import type { AppSettings } from './lib/store';
-import { fmtWhen, pickModels, turnOnNotices } from './lib/schedule';
-import { currentSubscription, pushNeedsHomeScreen, pushSupported } from './lib/webpush';
+import { ANDROID_WATCH, fmtWhen, noticesSupported, pickModels, turnOnNotices } from './lib/schedule';
+import { isAndroidApp } from './lib/android';
+import { currentSubscription, pushNeedsHomeScreen } from './lib/webpush';
 
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -21,9 +22,37 @@ const pad = (n: number) => String(n).padStart(2, '0');
 export function useNoticesOn(p: SyncPairing): boolean {
   const [on, setOn] = useState(false);
   useEffect(() => {
+    if (isAndroidApp) return setOn(p.pushEndpoint === ANDROID_WATCH);
     currentSubscription().then((s) => setOn(!!s && s.endpoint === p.pushEndpoint), () => setOn(false));
   }, [p.pushEndpoint]);
   return on;
+}
+
+/** Live sync > Alerts: offline server, WhatsApp unlinked, digest ready. */
+export function AlertsToggle({ p, member, onUpdate, onToast }: { p: SyncPairing; member: boolean; onUpdate: (p: SyncPairing) => Promise<void>; onToast: (s: string) => void }) {
+  const on = useNoticesOn(p);
+  if (on) return <p className="small ok">Alerts on for this phone</p>;
+  if (!noticesSupported())
+    return pushNeedsHomeScreen() ? <p className="small muted">Add Group Digest to your Home Screen to get alerts on this iPhone.</p> : null;
+  return (
+    <div className="row">
+      <span className="small" style={{ flex: '1 1 200px' }}>
+        {member ? 'Get a notification if WhatsApp unlinks you, or when a digest is ready.' : 'Get a notification if your server goes offline, WhatsApp unlinks it, or a digest is ready.'}
+      </span>
+      <button
+        className="primary"
+        onClick={async () => {
+          try {
+            onToast(await turnOnNotices(p, onUpdate));
+          } catch (e) {
+            onToast(e instanceof Error ? e.message : String(e));
+          }
+        }}
+      >
+        Turn on alerts
+      </button>
+    </div>
+  );
 }
 
 export function RecentNotices({ p }: { p: SyncPairing }) {
@@ -178,21 +207,6 @@ export default function Scheduled({
                 days. The first digest covers messages from when you turned this on. Groups with no new messages are skipped.
               </p>
               <div className="row">
-                {pushSupported() && !noticesOn && (
-                  <button
-                    className="primary"
-                    onClick={async () => {
-                      try {
-                        onToast(await turnOnNotices(p, onUpdate));
-                      } catch (e) {
-                        onToast(e instanceof Error ? e.message : String(e));
-                      }
-                    }}
-                  >
-                    Notify me on this phone
-                  </button>
-                )}
-                {noticesOn && <span className="small ok">Notifications on for this phone</span>}
                 <button
                   disabled={busy}
                   onClick={async () => {
@@ -203,10 +217,7 @@ export default function Scheduled({
                   Send a test digest now
                 </button>
               </div>
-              {pushNeedsHomeScreen() && <p className="small muted">On iPhone, add Group Digest to your Home Screen to get notifications.</p>}
-              {!pushSupported() && !pushNeedsHomeScreen() && (
-                <p className="small muted">Digests show up in each group here. This app checks for them whenever you open it.</p>
-              )}
+              {!noticesOn && <p className="small muted">Turn on alerts above to get a notification when a digest is ready.</p>}
             </>
           )}
         </>

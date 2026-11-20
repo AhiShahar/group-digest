@@ -42,6 +42,7 @@ export { PushBox };
 interface Env extends PushEnv {
   ASSETS: Fetcher;
   SYNC: DurableObjectNamespace<SyncRoom>;
+  OFFLINE_AFTER_MS?: string; // tests only
 }
 
 const MAX_BLOB = 256 * 1024; // bytes of base64 text per request
@@ -53,6 +54,8 @@ const MAX_NOTICE = 2800; // sealed notice, so the push payload stays under 4 KB
 const KEEP_NOTICES = 30;
 const NOTICES_PER_DAY = 40;
 const MAX_SUBS = 5;
+const OFFLINE_AFTER = 40 * 60e3; // the server reports at least every 15 minutes
+const OFFLINE_REMIND = 24 * 3600e3;
 
 export interface RoomSub extends Stored {
   offline: boolean;
@@ -146,6 +149,7 @@ export class SyncRoom extends DurableObject<Env> {
       const blob = blobOf();
       if (!blob) return { status: 400, body: { error: 'bad body' } };
       await s.put(op, { blob, at: Date.now() });
+      if (op === 'state') await this.serverSeen();
       return { status: 200, body: { ok: true } };
     }
     if (op === 'messages' && method === 'POST') {
@@ -240,6 +244,7 @@ export class SyncRoom extends DurableObject<Env> {
       return { status: 200, body: { notices: list } };
     }
     if (op === 'reset' && method === 'POST') {
+      await s.deleteAlarm();
       await s.deleteAll();
       return { status: 200, body: { ok: true } };
     }
@@ -263,6 +268,46 @@ export class SyncRoom extends DurableObject<Env> {
     const seq = count + 1;
     await s.put({ notes: seq, [`i:${String(seq).padStart(12, '0')}`]: { blob, at: Date.now() } });
     return { status: 200, body: { ok: true } };
+  }
+
+  // ---- health: tell the owner's phones when the sync server stops reporting ----
+
+  private offlineAfter(): number {
+    return Number(this.env.OFFLINE_AFTER_MS) || OFFLINE_AFTER;
+  }
+
+  private async serverSeen(): Promise<void> {
+    const s = this.ctx.storage;
+    const alerted = await s.get<number>('offlineAlertAt');
+    if (alerted) {
+      await s.delete(['offlineAlertAt', 'offlineReminders']);
+      const title = 'Sync server is back online';
+      const body = 'Live sync is working again. Messages that came in meanwhile will arrive shortly.';
+      await this.addNotice({ tag: 'offline', title, body });
+      await this.fanOut({ title, body, tag: 'offline' }, 'offline', true);
+    }
+    // Wakes up only if no report arrives in time; every report pushes it back.
+    await s.setAlarm(Date.now() + this.offlineAfter());
+  }
+
+  async alarm(): Promise<void> {
+    const s = this.ctx.storage;
+    const state = await s.get<{ at: number }>('state');
+    const subs = ((await s.get<RoomSub[]>('subs')) ?? []).filter((x) => x.offline);
+    if (!state || !subs.length) return;
+    const quiet = Date.now() - state.at;
+    if (quiet < this.offlineAfter() - 5e3) return void (await s.setAlarm(state.at + this.offlineAfter()));
+    const reminders = (await s.get<number>('offlineReminders')) ?? 0;
+    if (reminders >= 3) return; // after three days, stop nagging
+    const hours = Math.round(quiet / 3600e3);
+    const title = 'Sync server is offline';
+    const body =
+      (hours >= 2 ? `No word from your sync server for ${hours} hours. ` : `No word from your sync server for ${Math.max(1, Math.round(quiet / 60e3))} minute${Math.round(quiet / 60e3) > 1 ? 's' : ''}. `) +
+      'New WhatsApp messages are not being saved. Open Oracle Cloud, open your instance and press Reboot.';
+    await this.addNotice({ tag: 'offline', title, body });
+    await this.fanOut({ title, body, tag: 'offline' }, 'offline', true);
+    await s.put({ offlineAlertAt: Date.now(), offlineReminders: reminders + 1 });
+    await s.setAlarm(Date.now() + OFFLINE_REMIND);
   }
 
   private room = '';

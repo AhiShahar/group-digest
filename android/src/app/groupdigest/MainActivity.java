@@ -419,6 +419,11 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public void setNoticeWatch(String json) {
+            NoticeReceiver.watch(MainActivity.this, json);
+        }
+
+        @JavascriptInterface
         public String reminderIds() {
             return ReminderReceiver.futureIds(MainActivity.this);
         }

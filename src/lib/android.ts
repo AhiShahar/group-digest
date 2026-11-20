@@ -23,6 +23,8 @@ interface AndroidBridge {
   reminderIds?(): string; // JSON string[] of future reminders
   notificationsAllowed?(): boolean;
   askNotificationPermission?(): void;
+  // Live-sync notices, checked about every half hour in the background
+  setNoticeWatch?(json: string): void; // {relay, room, secret, after} or "" to stop
 }
 
 export interface CaptureStatus {
