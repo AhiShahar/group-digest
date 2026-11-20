@@ -2,4 +2,5 @@ bridge.mjs
 crypto.mjs
 parse.mjs
 digest.mjs
+backup.mjs
 package.json

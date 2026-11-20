@@ -60,6 +60,22 @@ export async function open<T>(k: SyncKeys, kind: BlobKind, blob: string): Promis
   return JSON.parse(new TextDecoder().decode(pt)) as T;
 }
 
+/** Encrypt raw bytes (backups). The label goes into the authenticated data, like kind does in seal. */
+export async function sealBytes(k: SyncKeys, label: string, data: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: enc.encode(`${k.room}/${label}`) }, k.key, data));
+  const out = new Uint8Array(12 + ct.length);
+  out.set(iv);
+  out.set(ct, 12);
+  return out;
+}
+
+export async function openBytes(k: SyncKeys, label: string, raw: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> {
+  return new Uint8Array(
+    await crypto.subtle.decrypt({ name: 'AES-GCM', iv: raw.slice(0, 12), additionalData: enc.encode(`${k.room}/${label}`) }, k.key, raw.slice(12)),
+  );
+}
+
 /** A new room id (128-bit, hex) and secret (256-bit, base64url). */
 export function newPairing(): { room: string; secret: string } {
   const r = crypto.getRandomValues(new Uint8Array(16));

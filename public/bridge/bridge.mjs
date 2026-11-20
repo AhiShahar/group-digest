@@ -35,7 +35,7 @@ import makeWASocket, { Browsers, DisconnectReason, fetchLatestBaileysVersion, us
 import { deriveKeys, hostInbox, importHostKey, newHostKey, open, openSealed, seal } from './crypto.mjs';
 import { toRecord } from './parse.mjs';
 
-const VERSION = '0.4.1';
+const VERSION = '0.4.2';
 const SELF = fileURLToPath(import.meta.url);
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 
@@ -63,7 +63,7 @@ async function serverFiles() {
   } catch {
     /* offline: use what is here */
   }
-  return [...BASE_FILES, 'digest.mjs'];
+  return [...BASE_FILES, 'digest.mjs', 'backup.mjs'];
 }
 async function loadModule(name) {
   const here = join(SELF, '..');
@@ -115,6 +115,7 @@ if (!process.env.GD_CHILD && getHeapStatistics().heap_size_limit / 2 ** 20 < wan
 
 async function main() {
   const { duePeriod, friendlyAiError, summarizeGroup } = await loadModule('digest.mjs');
+  const backup = await loadModule('backup.mjs');
   const DATA = process.env.GD_DATA || '/var/lib/group-digest';
   const LINK_WINDOW_MS = 10 * 60e3; // show QR codes for 10 minutes after the app asks
   const HISTORY_KEEP_MS = 60 * 60e3; // recent history from linking, kept in memory for an hour
@@ -393,7 +394,10 @@ async function main() {
     async pushState(force = false) {
       if (this.stopped && this.state.status !== 'removed') return;
       this.state.at = Date.now();
-      if (this.owner) this.state.host = host.summary();
+      if (this.owner) {
+        this.state.host = host.summary();
+        this.state.backupAt = lastBackupAt;
+      }
       const { at: _at, ...rest } = this.state;
       const sig = JSON.stringify(rest);
       if (!force && sig === this.lastPushed) return;
@@ -599,6 +603,7 @@ async function main() {
           const me = s.user ? { name: s.user.name || s.user.verifiedName || null, number: (s.user.id || '').split(':')[0].split('@')[0] } : null;
           log(this.label(), 'connected');
           const wasNew = !this.state.me;
+          if (wasNew) backupSoon();
           this.downSince = 0;
           if (this.downAlerted) {
             this.downAlerted = false;
@@ -687,6 +692,9 @@ async function main() {
   // ---- the host: owner + invited friends -------------------------------------------------
 
   const sessions = new Map(); // room -> Session
+  let restoredFrom = 0; // when the restored backup was made
+  let lastBackupAt = 0;
+  let backupSoon = () => {};
   const USERS = join(DATA, 'users');
 
   const host = {
@@ -794,6 +802,7 @@ async function main() {
       sessions.set(s.room, s);
       s.setState({ status: 'starting' });
       log(`friend ${s.room.slice(0, 6)} joined (${sessions.size - 1} of ${MAX_USERS})`);
+      backupSoon();
       await s.pollConfig();
       await s.connect();
       sessions.get(cfg.room)?.pushState();
@@ -803,6 +812,7 @@ async function main() {
       const s = sessions.get(room);
       if (!s || s.owner) return;
       log(`friend ${room.slice(0, 6)} ${why}`);
+      backupSoon();
       await s.logout();
       await s.stop();
       sessions.delete(room);
@@ -843,6 +853,39 @@ async function main() {
   // ---- start --------------------------------------------------------------------------------
 
   log(`Group Digest sync ${VERSION} starting, relay ${cfg.relay}, room for ${MAX_USERS} friends`);
+  const ownerKeys = await deriveKeys(cfg.room, cfg.secret);
+  const ownerCall = (method, op, body, query = '') => relay(ownerKeys, method, op, body, query);
+
+  // A new VM made with the same setup script: bring back the links and friends from the last backup.
+  if (backup.isFreshInstall(DATA)) {
+    try {
+      const got = await backup.download(ownerCall, ownerKeys, 'server');
+      if (got) {
+        const n = backup.restore(DATA, got.value.files || {});
+        log(`restored ${n} files from the backup of ${new Date(got.at).toISOString()}`);
+        restoredFrom = got.at;
+      }
+    } catch (e) {
+      log('no backup restored:', e.message);
+    }
+  }
+
+  let backupTimer = null;
+  async function backupNow() {
+    try {
+      for (const s of sessions.values()) await s.writeArchive();
+      const size = await backup.upload(ownerCall, ownerKeys, 'server', { v: 1, version: VERSION, at: Date.now(), files: backup.collect(DATA) });
+      lastBackupAt = Date.now();
+      log(`server backup saved (${Math.round(size / 1024)} KB)`);
+    } catch (e) {
+      log('server backup failed:', e.message);
+    }
+  }
+  /** Back up soon (after a link or a friend joining), at most once per few minutes. */
+  backupSoon = () => {
+    clearTimeout(backupTimer);
+    backupTimer = setTimeout(backupNow, 3 * 60e3);
+  };
   mkdirSync(USERS, { recursive: true, mode: 0o700 });
   await host.init();
 
@@ -903,6 +946,9 @@ async function main() {
   setInterval(() => {
     for (const s of sessions.values()) s.refreshGroups();
   }, 6 * 3600e3);
+  setTimeout(backupNow, Number(process.env.GD_BACKUP_AFTER_MS) || 10 * 60e3);
+  setInterval(backupNow, 24 * 3600e3);
+  if (restoredFrom) setTimeout(() => owner.notice('Sync server restored', `This server came back from the backup of ${new Date(restoredFrom).toUTCString()}. WhatsApp links and friends carried over.`, 'health'), 60e3);
   setTimeout(checkForUpdate, 5 * 60e3);
   setInterval(checkForUpdate, 6 * 3600e3);
 

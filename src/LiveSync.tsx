@@ -432,6 +432,11 @@ export default function LiveSync({ settings, onToast, onSynced }: { settings: Ap
               </p>
             )}
             {st?.error && <p className="small warn">{st.error}</p>}
+            {!member && st && st.status !== 'removed' && st.version >= '0.4.2' && (
+              <p className="small muted">
+                {st.backupAt ? `Server backup saved ${ago(st.backupAt)}: if the VM is ever lost, a new one made with the same setup script restores your WhatsApp link and friends.` : 'The server saves a backup of its WhatsApp link and friends about 10 minutes after it starts, then daily.'}
+              </p>
+            )}
             {st && st.status !== 'removed' && <AlertsToggle p={p} member={member} onUpdate={update} onToast={onToast} />}
             {!member && st && st.version < '0.2.0' && (
               <p className="small warn">

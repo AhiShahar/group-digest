@@ -94,6 +94,10 @@ export async function putDigest(d: StoredDigest): Promise<void> {
   await wrap((await store('digests', 'readwrite')).put(d));
 }
 
+export async function allDigests(): Promise<StoredDigest[]> {
+  return (await wrap((await store('digests')).getAll())) as StoredDigest[];
+}
+
 export async function getKv<T>(key: string): Promise<T | undefined> {
   return (await wrap((await store('kv')).get(key))) as T | undefined;
 }

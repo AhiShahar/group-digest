@@ -10,7 +10,7 @@ import { deriveKeys, newInviteCode, newPairing, open, seal, sealTo, type SyncKey
 /** Where the relay lives. The web app uses its own origin; the Android app uses the hosted one. */
 export const RELAY_URL: string =
   (import.meta.env.VITE_RELAY_URL as string | undefined) ||
-  (import.meta.env.VITE_TARGET !== 'android' && location.protocol === 'https:' ? location.origin : 'https://group-digest.ahi-shahar1.workers.dev');
+  (import.meta.env.VITE_TARGET !== 'android' && typeof location !== 'undefined' && location.protocol === 'https:' ? location.origin : 'https://group-digest.ahi-shahar1.workers.dev');
 
 export interface SyncPairing {
   room: string;
@@ -38,6 +38,8 @@ export interface SyncPairing {
   leave?: boolean;
   /** Scheduled digests made by the sync server with this person's own AI. */
   digest?: DigestSchedule;
+  /** false turns off the daily backup of this device's data to the relay. */
+  backup?: boolean;
   /** This phone gets notices (digests ready, alerts) by Web Push. */
   pushEndpoint?: string;
 }
@@ -110,6 +112,7 @@ export interface BridgeState {
   lastMessageAt: number;
   at: number; // when the server last reported
   host?: HostInfo & { max: number; members: Member[] }; // owner only
+  backupAt?: number; // owner only: last server backup
 }
 
 interface SyncedDigest {

@@ -24,6 +24,14 @@
 //   POST /notice      {blob, tag?}     sync server -> phones
 //   GET  /notices?after=<seq>
 //
+// Backups (sealed, gzip): the app's data and the server's own state, so a new
+// phone or a new VM can pick up where the old one stopped. Uploaded in parts,
+// then committed; only the last committed copy of each name is kept.
+//   PUT  /backup?name=app|server&gen=<n>&part=<i>   {blob}
+//   POST /backup-commit {name, gen, parts, size}
+//   GET  /backup?name=<name>                manifest {gen, parts, size, at}
+//   GET  /backup?name=<name>&part=<i>       {blob}
+//
 // Host inbox (a sync server that hosts friends): anyone who has the inbox id
 // from an invite link may drop a small sealed note (join request, "my config
 // changed"); only the server can read and clear it.
@@ -54,6 +62,8 @@ const MAX_NOTICE = 2800; // sealed notice, so the push payload stays under 4 KB
 const KEEP_NOTICES = 30;
 const NOTICES_PER_DAY = 40;
 const MAX_SUBS = 5;
+const BACKUP_PART = 120_000; // a Durable Object value holds up to 128 KiB
+const BACKUP_PARTS = 250; // about 30 MB per backup
 const OFFLINE_AFTER = 40 * 60e3; // the server reports at least every 15 minutes
 const OFFLINE_REMIND = 24 * 3600e3;
 
@@ -97,7 +107,7 @@ function sameString(a: string, b: string): boolean {
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
-    const m = /^\/api\/sync\/([a-f0-9]{32})\/(state|config|messages|ack|reset|inbox|inbox-ack|push|push-remove|notice|notices)$/.exec(url.pathname);
+    const m = /^\/api\/sync\/([a-f0-9]{32})\/(state|config|messages|ack|reset|inbox|inbox-ack|push|push-remove|notice|notices|backup|backup-commit)$/.exec(url.pathname);
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(req);
     const push = /^\/api\/push\/([a-z]+)$/.exec(url.pathname);
     if (push) return handlePush(req, env, push[1]);
@@ -117,7 +127,9 @@ export default {
     const room = env.SYNC.get(env.SYNC.idFromName(m[1]));
     const body = req.method === 'GET' ? '' : await req.text();
     if (body.length > MAX_BLOB + 1024) return json({ error: 'too large' }, 413);
-    const res = (await room.handle(await sha256(token), req.method, m[2], url.searchParams.get('after'), body, url.origin, m[1])) as unknown as Result;
+    const q = url.searchParams;
+    const after = m[2] === 'backup' ? JSON.stringify({ name: q.get('name'), gen: q.get('gen'), part: q.get('part') }) : q.get('after');
+    const res = (await room.handle(await sha256(token), req.method, m[2], after, body, url.origin, m[1])) as unknown as Result;
     return json(res.body, res.status);
   },
 } satisfies ExportedHandler<Env>;
@@ -243,6 +255,7 @@ export class SyncRoom extends DurableObject<Env> {
       const list = ((await s.get<Notice[]>('notices')) ?? []).filter((n) => n.seq > from);
       return { status: 200, body: { notices: list } };
     }
+    if (op === 'backup' || op === 'backup-commit') return this.backup(method, op, after, body);
     if (op === 'reset' && method === 'POST') {
       await s.deleteAlarm();
       await s.deleteAll();
@@ -308,6 +321,57 @@ export class SyncRoom extends DurableObject<Env> {
     await this.fanOut({ title, body, tag: 'offline' }, 'offline', true);
     await s.put({ offlineAlertAt: Date.now(), offlineReminders: reminders + 1 });
     await s.setAlarm(Date.now() + OFFLINE_REMIND);
+  }
+
+  // ---- backups ----
+
+  private async backup(method: string, op: string, query: string | null, body: string): Promise<Result> {
+    const s = this.ctx.storage;
+    let q: { name?: unknown; gen?: unknown; part?: unknown } = {};
+    try {
+      q = JSON.parse(op === 'backup-commit' ? body : (query ?? '{}'));
+    } catch {
+      /* bad */
+    }
+    const name = typeof q.name === 'string' && /^[a-z]{1,16}$/.test(q.name) ? q.name : null;
+    if (!name) return { status: 400, body: { error: 'bad name' } };
+    const gen = Number(q.gen);
+    const part = Number(q.part);
+    type Manifest = { gen: number; parts: number; size: number; at: number };
+    const key = (g: number, i: number) => `b:${name}:${g}:${String(i).padStart(4, '0')}`;
+    if (op === 'backup' && method === 'PUT') {
+      if (!Number.isSafeInteger(gen) || gen <= 0 || !Number.isInteger(part) || part < 0 || part >= BACKUP_PARTS) return { status: 400, body: { error: 'bad part' } };
+      let blob: unknown;
+      try {
+        blob = (JSON.parse(body) as { blob?: unknown }).blob;
+      } catch {
+        /* bad */
+      }
+      if (typeof blob !== 'string' || blob.length > BACKUP_PART || !/^[A-Za-z0-9_-]*$/.test(blob)) return { status: 400, body: { error: 'bad body' } };
+      await s.put(key(gen, part), blob);
+      return { status: 200, body: { ok: true } };
+    }
+    if (op === 'backup-commit' && method === 'POST') {
+      const parts = Number((q as { parts?: unknown }).parts);
+      const size = Number((q as { size?: unknown }).size) || 0;
+      if (!Number.isSafeInteger(gen) || !Number.isInteger(parts) || parts < 1 || parts > BACKUP_PARTS) return { status: 400, body: { error: 'bad commit' } };
+      const got = await s.list({ prefix: `b:${name}:${gen}:` });
+      if (got.size !== parts) return { status: 409, body: { error: `have ${got.size} of ${parts} parts` } };
+      await s.put(`bm:${name}`, { gen, parts, size, at: Date.now() } satisfies Manifest);
+      // Drop every other generation of this name (older copies, abandoned uploads).
+      const all = await s.list({ prefix: `b:${name}:` });
+      const drop = [...all.keys()].filter((k) => !k.startsWith(`b:${name}:${gen}:`));
+      for (let i = 0; i < drop.length; i += 128) await s.delete(drop.slice(i, i + 128));
+      return { status: 200, body: { ok: true } };
+    }
+    if (op === 'backup' && method === 'GET') {
+      const man = await s.get<Manifest>(`bm:${name}`);
+      if (!man) return { status: 404, body: { error: 'no backup' } };
+      if (q.part === null || q.part === undefined) return { status: 200, body: man };
+      if (!Number.isInteger(part) || part < 0 || part >= man.parts) return { status: 400, body: { error: 'bad part' } };
+      return { status: 200, body: { blob: (await s.get<string>(key(man.gen, part))) ?? '' } };
+    }
+    return { status: 405, body: { error: 'method not allowed' } };
   }
 
   private room = '';

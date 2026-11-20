@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { buildIcs, downloadFile, googleCalendarUrl, outlookCalendarUrl, safeFilename } from './lib/calendar';
 import type { Digest, DigestEvent } from './lib/digest';
 import LiveSync from './LiveSync';
+import Backup from './Backup';
+import { autoBackup } from './lib/backup';
 import { fetchNotices, lastDigests, loadPairing, pullMessages, pushConfig, savePairing, type SyncNotice } from './lib/liveSync';
 import { openProblem, refreshAndroidWatch } from './lib/schedule';
 import { addEventNative, bridge, canCapture, captureStatus, isAndroidApp, peekCaptured, takeNativeShare, type CaptureStatus } from './lib/android';
@@ -253,7 +255,10 @@ export default function App() {
       if (document.visibilityState === 'hidden') return;
       try {
         const p = await loadPairing();
-        if (first) refreshAndroidWatch(p);
+        if (first) {
+          refreshAndroidWatch(p);
+          autoBackup().catch(() => undefined);
+        }
         first = false;
         setProblem(p ? openProblem(await fetchNotices(p)) : null);
       } catch {
@@ -1103,6 +1108,8 @@ function Settings({
 
       <LiveSync settings={settings} onToast={onToast} onSynced={onWiped} />
 
+      <Backup onToast={onToast} onRestored={() => setTimeout(() => location.reload(), 2500)} />
+
       {canCapture && <LiveCapture chats={chats} />}
       {isAndroidApp && !canCapture && (
         <p className="muted small">
@@ -1116,6 +1123,7 @@ function Settings({
           Chats, digests and keys live only on this device. The only network calls are to the AI provider you chose, with the
           messages you asked it to summarize (phone numbers are masked first). If you turn on live sync, your own sync server passes messages
           from the groups you chose through this app's relay, end-to-end encrypted, and they are deleted from the relay once this device has them.
+          Backups of this device's data are sealed with your live-sync key before they reach the relay; only your recovery key opens them.
           With scheduled digests on, your sync server keeps those groups' messages (encrypted, up to nine days) and sends them to your AI
           at the time you picked, using the AI key from this device.
           If you turn on reminders on the website, only event titles and times go to this app's reminder service. Other group members have not agreed to AI processing, so consider
