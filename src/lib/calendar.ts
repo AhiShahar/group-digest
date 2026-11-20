@@ -63,7 +63,7 @@ function describe(e: DigestEvent, chatName: string): string {
 }
 
 export async function buildIcs(events: DigestEvent[], chatName: string, reminders?: ReminderPrefs): Promise<string> {
-  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Group Digest//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH'];
+  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Nutshell//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH'];
   const now = utc(new Date());
   for (const e of events) {
     const { start, end, allDay } = eventTimes(e);

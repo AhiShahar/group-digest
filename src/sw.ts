@@ -72,11 +72,11 @@ async function showPush(data: PushData) {
       const n = await open<{ title: string; body: string }>(await deriveKeys(p.room, p.secret), 'notice', data.sealed);
       ({ title, body } = n);
     } catch {
-      title = 'Group Digest';
+      title = 'Nutshell';
       body = 'Something new from your sync server. Open the app to see it.';
     }
   }
-  await self.registration.showNotification(title || 'Group Digest', {
+  await self.registration.showNotification(title || 'Nutshell', {
     body: body ?? '',
     tag: data.tag,
     icon: './pwa-192x192.png',

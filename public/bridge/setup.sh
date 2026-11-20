@@ -1,5 +1,5 @@
 #!/bin/bash
-# Installs or updates the Group Digest sync server on a Linux VM (Debian,
+# Installs or updates the Nutshell sync server on a Linux VM (Debian,
 # Ubuntu or Oracle Linux; x64 or arm64) and runs it as a systemd service.
 #
 #   curl -fsSL https://<your app>/bridge/setup.sh | sudo bash -s -- <relay-url> <room> <secret>
@@ -23,7 +23,7 @@ else
   echo "Usage: setup.sh <relay-url> <room> <secret>"; exit 1
 fi
 
-echo "==> Group Digest sync: setting up"
+echo "==> Nutshell sync: setting up"
 id gdsync >/dev/null 2>&1 || useradd --system --home "$DATA" --shell /usr/sbin/nologin gdsync
 mkdir -p "$APP" "$DATA" /etc/group-digest
 chown gdsync:gdsync "$DATA"; chmod 700 "$DATA"
@@ -82,7 +82,7 @@ chown -R gdsync:gdsync "$APP"
 
 cat > /etc/systemd/system/group-digest-sync.service <<UNIT
 [Unit]
-Description=Group Digest WhatsApp sync
+Description=Nutshell WhatsApp sync
 After=network-online.target
 Wants=network-online.target
 

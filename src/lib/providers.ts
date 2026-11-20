@@ -153,7 +153,7 @@ async function callOpenAiCompatible(s: ProviderSettings, system: string, user: s
   const headers: Record<string, string> = { 'content-type': 'application/json', ...bearer(s) };
   if (s.provider === 'openrouter') {
     headers['HTTP-Referer'] = location.origin;
-    headers['X-Title'] = 'Group Digest';
+    headers['X-Title'] = 'Nutshell';
   }
   let res = await fetch(`${openAiBase(s)}/chat/completions`, { method: 'POST', headers, body: JSON.stringify(body) });
   if (res.status === 400) {

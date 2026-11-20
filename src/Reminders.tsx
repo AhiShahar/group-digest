@@ -153,7 +153,7 @@ function WebPushControls({ onToast }: { onToast: (s: string) => void }) {
   if (pushNeedsHomeScreen()) {
     return (
       <p className="small">
-        <strong>On iPhone:</strong> tap Share, then <b>Add to Home Screen</b>, and open Group Digest from there. Then you can turn on reminders
+        <strong>On iPhone:</strong> tap Share, then <b>Add to Home Screen</b>, and open Nutshell from there. Then you can turn on reminders
         here (iOS 16.4 or newer).
       </p>
     );

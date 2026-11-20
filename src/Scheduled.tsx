@@ -33,7 +33,7 @@ export function AlertsToggle({ p, member, onUpdate, onToast }: { p: SyncPairing;
   const on = useNoticesOn(p);
   if (on) return <p className="small ok">Alerts on for this phone</p>;
   if (!noticesSupported())
-    return pushNeedsHomeScreen() ? <p className="small muted">Add Group Digest to your Home Screen to get alerts on this iPhone.</p> : null;
+    return pushNeedsHomeScreen() ? <p className="small muted">Add Nutshell to your Home Screen to get alerts on this iPhone.</p> : null;
   return (
     <div className="row">
       <span className="small" style={{ flex: '1 1 200px' }}>

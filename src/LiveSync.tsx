@@ -162,7 +162,7 @@ function Friends({ p, st, onUpdate, onToast }: { p: SyncPairing; st: BridgeState
             setLastLink(link);
             setName('');
             try {
-              if (navigator.share) await navigator.share({ title: 'Group Digest invite', text: `Join my Group Digest live sync: ${link}` });
+              if (navigator.share) await navigator.share({ title: 'Nutshell invite', text: `Join my Nutshell live sync: ${link}` });
               else {
                 await navigator.clipboard.writeText(link);
                 onToast('Invite link copied.');
@@ -274,7 +274,7 @@ function PhoneLink({ p, st, member, onUpdate }: { p: SyncPairing; st: BridgeStat
 }
 
 function InviteShare({ link, from, onToast }: { link: string; from: string; onToast: (s: string) => void }) {
-  const text = `${from ? `${from} invited you` : "You're invited"} to Group Digest live sync. Open this link on your phone: ${link}`;
+  const text = `${from ? `${from} invited you` : "You're invited"} to Nutshell live sync. Open this link on your phone: ${link}`;
   return (
     <div className="card" style={{ marginTop: 8 }}>
       <p className="small">
@@ -289,7 +289,7 @@ function InviteShare({ link, from, onToast }: { link: string; from: string; onTo
         {typeof navigator.share === 'function' && (
           <button
             onClick={() =>
-              navigator.share({ title: 'Group Digest invite', text }).catch(() => {
+              navigator.share({ title: 'Nutshell invite', text }).catch(() => {
                 /* closed */
               })
             }

@@ -43,7 +43,7 @@ export async function finishOpenRouterSignIn(): Promise<string | null> {
   }
   localStorage.removeItem(VERIFIER_KEY);
   if (!verifier) {
-    throw new Error('Sign-in finished in a different window. Open Group Digest from your Home Screen and tap Sign in again.');
+    throw new Error('Sign-in finished in a different window. Open Nutshell from your Home Screen and tap Sign in again.');
   }
   const res = await fetch('https://openrouter.ai/api/v1/auth/keys', {
     method: 'POST',
