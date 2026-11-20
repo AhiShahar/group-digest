@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { buildIcs, downloadFile, googleCalendarUrl, outlookCalendarUrl, safeFilename } from './lib/calendar';
 import type { Digest, DigestEvent } from './lib/digest';
 import LiveSync from './LiveSync';
-import { lastDigests, loadPairing, pullMessages, pushConfig, savePairing } from './lib/liveSync';
+import { fetchNotices, lastDigests, loadPairing, pullMessages, pushConfig, savePairing, type SyncNotice } from './lib/liveSync';
+import { openProblem, refreshAndroidWatch } from './lib/schedule';
 import { addEventNative, bridge, canCapture, captureStatus, isAndroidApp, peekCaptured, takeNativeShare, type CaptureStatus } from './lib/android';
 import { finishOpenRouterSignIn, startOpenRouterSignIn } from './lib/openrouter';
 import { parseChatText, readExportFile } from './lib/parser';
@@ -243,6 +244,31 @@ export default function App() {
     };
   }, [loaded, refreshChats]);
 
+  // Live sync health: show a banner while the server is offline or WhatsApp unlinked it.
+  const [problem, setProblem] = useState<SyncNotice | null>(null);
+  useEffect(() => {
+    if (!loaded) return;
+    let first = true;
+    const check = async () => {
+      if (document.visibilityState === 'hidden') return;
+      try {
+        const p = await loadPairing();
+        if (first) refreshAndroidWatch(p);
+        first = false;
+        setProblem(p ? openProblem(await fetchNotices(p)) : null);
+      } catch {
+        /* offline */
+      }
+    };
+    check();
+    const timer = setInterval(check, 5 * 60_000);
+    document.addEventListener('visibilitychange', check);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', check);
+    };
+  }, [loaded]);
+
   const updateSettings = async (s: AppSettings) => {
     const before = settings;
     setSettings(s);
@@ -292,6 +318,21 @@ export default function App() {
             }}
             onOther={() => setView({ name: 'settings' })}
           />
+        )}
+        {problem && view.name === 'chats' && (
+          <div className="banner alert" role="alert">
+            <span>
+              <b>{problem.title}.</b> {problem.body}
+            </span>
+            <button
+              onClick={() => {
+                setView({ name: 'settings' });
+                setTimeout(() => document.getElementById('live-sync')?.scrollIntoView({ behavior: 'smooth' }), 100);
+              }}
+            >
+              Live sync
+            </button>
+          </div>
         )}
         {iosInstall && <IosInstallCard onDismiss={() => setIosInstall(false)} />}
         {installEvt && (

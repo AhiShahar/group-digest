@@ -103,6 +103,7 @@ input, select {
 .banner { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap;
   background: var(--brand-soft); border-radius: var(--radius); padding: 12px 14px; margin-top: 12px; font-size: 14.5px; }
 .banner.subtle { background: var(--card); border: 1px solid var(--line); }
+.banner.alert { background: color-mix(in srgb, var(--warn) 16%, var(--card)); border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); }
 
 .drop { background: var(--card); border: 2px dashed var(--line); border-radius: var(--radius); padding: 16px; margin-top: 16px; }
 .drop.on { border-color: var(--brand); }

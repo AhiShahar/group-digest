@@ -78,6 +78,8 @@ Each person's data and key stay on their own device, so testers do not see each 
 
 **Scheduled digests (live sync):** in Live sync, pick Every day or Every week and a time. The sync server keeps the chosen groups' messages on its disk (sealed with the person's own key, 3 days for daily, 9 for weekly, deleted when turned off), summarizes each group with new messages at that time using the AI settings sent from the phone (inside the encrypted config), and sends the digests through the relay like messages. A sealed notice goes to the relay's `/notice`, which Web Pushes it to phones that tapped Notify me; the service worker opens it with the room key, so the Worker never sees the text. Code: `public/bridge/digest.mjs` (same prompt as the app, checked by a test), `src/Scheduled.tsx`.
 
+**Health alerts (live sync):** Live sync > Turn on alerts. The relay's room for the server owner sets a Durable Object alarm 40 minutes after each status report; if it fires, the owner's phones get "Sync server is offline" (again daily, at most 3 times) and "back online" when it reports again. The sync server itself sends sealed notices when WhatsApp logs the linked device out, when another copy takes over the link, or when it cannot reach WhatsApp for an hour. The Chats screen shows a banner while a problem is open. The Android app has no Web Push, so `NoticeReceiver` checks the room's notices about every half hour and shows them as notifications.
+
 Settings > **Live sync from WhatsApp** links WhatsApp once by QR code, like WhatsApp Web, and new messages from the groups you tick flow into the app on any phone, iPhone included. Unofficial: WhatsApp may restrict accounts that use it, so start with your own number.
 
 ```

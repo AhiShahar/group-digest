@@ -35,7 +35,7 @@ import makeWASocket, { Browsers, DisconnectReason, fetchLatestBaileysVersion, us
 import { deriveKeys, hostInbox, importHostKey, newHostKey, open, openSealed, seal } from './crypto.mjs';
 import { toRecord } from './parse.mjs';
 
-const VERSION = '0.4.0';
+const VERSION = '0.4.1';
 const SELF = fileURLToPath(import.meta.url);
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 
@@ -189,6 +189,8 @@ async function main() {
       this.archiveDir = join(dir, 'archive');
       this.toArchive = [];
       this.digestRun = null; // the scheduled digest in progress
+      this.downSince = 0; // linked, but not connected to WhatsApp since then
+      this.downAlerted = false;
       this.digestState = { lastKey: null, ends: {}, tries: 0, nextTry: 0, testSeen: null };
     }
 
@@ -293,6 +295,18 @@ async function main() {
     }
 
     // ---- scheduled digests -----------------------------------------------------------
+
+    /** Called every minute: one alert when a linked account cannot reach WhatsApp for an hour. */
+    checkHealth() {
+      if (this.downSince && !this.downAlerted && Date.now() - this.downSince > 60 * 60e3) {
+        this.downAlerted = true;
+        this.notice(
+          'Sync server cannot reach WhatsApp',
+          'It has been trying for an hour. It keeps trying by itself; if this lasts, open Oracle Cloud, open your instance and press Reboot.',
+          'health',
+        );
+      }
+    }
 
     /** Called every minute. Runs the person's digest when it is due (or when they asked for a test). */
     async maybeDigest() {
@@ -558,6 +572,7 @@ async function main() {
       setTimeout(() => {
         if (this.sock !== s || progressed) return;
         log(this.label(), 'no answer from WhatsApp in 90s, retrying');
+        if (!this.downSince && auth.creds.registered) this.downSince = Date.now();
         this.setState({ status: this.state.status === 'connected' ? 'starting' : this.state.status, error: 'Cannot reach WhatsApp from the server yet, retrying' });
         this.sock = null;
         s.end(undefined);
@@ -583,6 +598,14 @@ async function main() {
           this.retry = 0;
           const me = s.user ? { name: s.user.name || s.user.verifiedName || null, number: (s.user.id || '').split(':')[0].split('@')[0] } : null;
           log(this.label(), 'connected');
+          const wasNew = !this.state.me;
+          this.downSince = 0;
+          if (this.downAlerted) {
+            this.downAlerted = false;
+            this.notice('Connected to WhatsApp again', 'Live sync is working again.', 'health');
+          } else if (wasNew && this.linkRequestedAt && Date.now() - Math.max(this.linkRequestedAt, this.pairAt) < LINK_WINDOW_MS) {
+            this.notice('WhatsApp linked', 'Your sync server is linked. Pick the groups to sync in Group Digest.', 'health');
+          }
           this.pairPhone = null;
           this.setState({ status: 'connected', qr: null, code: null, me, error: null });
           this.refreshGroups();
@@ -593,13 +616,24 @@ async function main() {
           if (this.stopped) return;
           if (code === DisconnectReason.loggedOut) {
             log(this.label(), 'logged out from the phone; waiting for a new link');
+            this.downSince = 0;
+            this.notice(
+              'WhatsApp unlinked your sync server',
+              'Live sync stopped: the linked device was logged out, from your phone or by WhatsApp. Open Group Digest, Live sync, to link again.',
+              'unlinked',
+            );
             rmSync(this.authDir, { recursive: true, force: true });
             this.setState({ status: 'unlinked', qr: null, me: null, groups: [], error: 'Logged out from the phone' });
             return;
           }
           if (code === DisconnectReason.connectionReplaced) {
             this.setState({ status: 'error', error: 'Another copy of the sync server took over this link' });
+            if (!this.replacedAlerted) {
+              this.replacedAlerted = true;
+              this.notice('Two sync servers on one link', 'Another copy of the sync server took over this WhatsApp link. Turn off the old VM if you made a new one.', 'health');
+            }
           }
+          if (!this.downSince && auth.creds.registered) this.downSince = Date.now();
           const wait = code === DisconnectReason.restartRequired ? 0 : Math.min(5 * 60e3, 2000 * 2 ** this.retry++);
           log(this.label(), `connection closed (${code ?? 'no code'}), reconnecting in ${Math.round(wait / 1000)}s`);
           setTimeout(() => this.connect(), wait);
@@ -852,7 +886,10 @@ async function main() {
     for (const s of sessions.values()) s.flush().then(() => s.writeArchive());
   }, 15e3);
   setInterval(() => {
-    for (const s of sessions.values()) s.maybeDigest();
+    for (const s of sessions.values()) {
+      s.checkHealth();
+      s.maybeDigest();
+    }
   }, 60e3);
   setInterval(() => {
     for (const s of sessions.values()) s.pruneArchive();
