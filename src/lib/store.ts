@@ -2,6 +2,7 @@ import { LEGACY_DEFAULTS } from './models';
 import { DEFAULT_REMINDERS, type ReminderPrefs } from './reminders';
 // Everything is stored on this device only, in IndexedDB.
 import type { Digest } from './digest';
+import { upgradeDigest } from './decisions';
 import type { ChatMessage } from './parser';
 import type { ProviderSettings } from './providerInfo';
 
@@ -88,15 +89,18 @@ export async function deleteChat(id: string): Promise<void> {
 export async function listDigests(chatId: string): Promise<StoredDigest[]> {
   const s = await store('digests');
   const all = (await wrap(s.index('chatId').getAll(chatId))) as StoredDigest[];
-  return all.sort((a, b) => b.createdAt - a.createdAt);
+  return all.map(upgrade).sort((a, b) => b.createdAt - a.createdAt);
 }
 export async function putDigest(d: StoredDigest): Promise<void> {
   await wrap((await store('digests', 'readwrite')).put(d));
 }
 
 export async function allDigests(): Promise<StoredDigest[]> {
-  return (await wrap((await store('digests')).getAll())) as StoredDigest[];
+  return ((await wrap((await store('digests')).getAll())) as StoredDigest[]).map(upgrade);
 }
+
+/** Digests saved before decisions had who, when and where. */
+const upgrade = (d: StoredDigest): StoredDigest => ({ ...d, digest: upgradeDigest(d.digest) });
 
 export async function getKv<T>(key: string): Promise<T | undefined> {
   return (await wrap((await store('kv')).get(key))) as T | undefined;

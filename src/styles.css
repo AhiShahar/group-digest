@@ -235,3 +235,14 @@ ul.card.plain .check { align-items: flex-start; padding: 2px 0; }
 .btn.primary { background: linear-gradient(135deg, var(--brand), var(--brand-2)); color: var(--brand-ink); box-shadow: 0 8px 20px -8px var(--brand); }
 ol.steps { margin: 8px 0; padding-left: 22px; }
 ol.steps li { padding: 2px 0; }
+
+/* Decisions: what, then who / when / where / group */
+ul.decisions { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 8px; }
+ul.decisions li { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px 14px; overflow-wrap: anywhere; }
+ul.decisions .what { margin: 0; font-weight: 600; }
+ul.decisions .facts { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 6px 0 0; font-size: 14px; }
+ul.decisions dt { color: var(--muted); }
+ul.decisions dd { margin: 0; }
+/* Coming up: date and title on one line, group and place under it */
+ul.card.plain li.when-row button.link.inline { text-align: start; }
+ul.card.plain li.when-row .sub { display: block; }

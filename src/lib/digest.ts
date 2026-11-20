@@ -12,10 +12,18 @@ export const EventSchema = z.object({
   confidence: z.enum(['high', 'medium', 'low']),
 });
 
+export const DecisionSchema = z.object({
+  what: z.string().describe('What was decided, in a few words'),
+  who: z.string().nullable().describe('Who decided or is responsible, or null'),
+  date: z.string().nullable().describe('YYYY-MM-DD the decision is about, or null'),
+  time: z.string().nullable().describe('24h HH:MM, or null'),
+  where: z.string().nullable(),
+});
+
 export const DigestSchema = z.object({
   headline: z.string().describe('One sentence: the most important thing that happened'),
   key_points: z.array(z.string()),
-  decisions: z.array(z.string()),
+  decisions: z.array(DecisionSchema),
   action_items: z.array(
     z.object({
       task: z.string(),
@@ -29,6 +37,8 @@ export const DigestSchema = z.object({
 
 export type Digest = z.infer<typeof DigestSchema>;
 export type DigestEvent = z.infer<typeof EventSchema>;
+export type Decision = z.infer<typeof DecisionSchema>;
+
 
 export interface DigestRequest {
   chatName: string;
@@ -70,6 +80,8 @@ Rules:
 - Only report what the messages say. Never invent facts, times or people.
 - Each message line starts with its own weekday, date and time. Resolve relative dates ("tomorrow", "next Thursday", "on the 25th") against the date of the message that mentions them, and output absolute dates as YYYY-MM-DD.
 - An event is a plan with a date that the reader may want in their calendar (a meeting, a party, a deadline, a trip, a school day off). Skip events that were cancelled, and use the latest time if a plan was moved. If a plan has no date at all, put it in key_points, not events.
+- A decision is something the group agreed on or settled. For each, give what was decided in a few words, who decided or is responsible, and the date, time and place it is about, if any.
+- Call people by the name others in the chat use for them when that is clear, rather than a username.
 - Use null for unknown fields. Use empty arrays when there is nothing to report.
 - Return only the JSON object, with no extra text.`;
 
@@ -90,7 +102,8 @@ export function buildUserPrompt(req: DigestRequest, transcript: string, partNote
 
 /** JSON shape description for providers without native schema enforcement. */
 export const SCHEMA_HINT = `Return JSON with exactly these keys:
-{"headline": string, "key_points": string[], "decisions": string[],
+{"headline": string, "key_points": string[],
+ "decisions": [{"what": string, "who": string|null, "date": "YYYY-MM-DD"|null, "time": "HH:MM"|null, "where": string|null}],
  "action_items": [{"task": string, "owner": string|null, "due": "YYYY-MM-DD"|null}],
  "open_questions": string[],
  "events": [{"title": string, "date": "YYYY-MM-DD", "start_time": "HH:MM"|null, "end_time": "HH:MM"|null,
@@ -130,7 +143,7 @@ export function mergeDigests(parts: Digest[]): Digest {
   return {
     headline: parts[parts.length - 1].headline,
     key_points: uniq(parts.flatMap((p) => p.key_points)),
-    decisions: uniq(parts.flatMap((p) => p.decisions)),
+    decisions: [...new Map(parts.flatMap((p) => p.decisions).map((d) => [d.what.toLowerCase().trim(), d])).values()],
     action_items: parts.flatMap((p) => p.action_items),
     open_questions: uniq(parts.flatMap((p) => p.open_questions)),
     events: [...events.values()],

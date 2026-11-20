@@ -8,11 +8,14 @@ Rules:
 - Only report what the messages say. Never invent facts, times or people.
 - Each message line starts with its own weekday, date and time. Resolve relative dates ("tomorrow", "next Thursday", "on the 25th") against the date of the message that mentions them, and output absolute dates as YYYY-MM-DD.
 - An event is a plan with a date that the reader may want in their calendar (a meeting, a party, a deadline, a trip, a school day off). Skip events that were cancelled, and use the latest time if a plan was moved. If a plan has no date at all, put it in key_points, not events.
+- A decision is something the group agreed on or settled. For each, give what was decided in a few words, who decided or is responsible, and the date, time and place it is about, if any.
+- Call people by the name others in the chat use for them when that is clear, rather than a username.
 - Use null for unknown fields. Use empty arrays when there is nothing to report.
 - Return only the JSON object, with no extra text.`;
 
 export const SCHEMA_HINT = `Return JSON with exactly these keys:
-{"headline": string, "key_points": string[], "decisions": string[],
+{"headline": string, "key_points": string[],
+ "decisions": [{"what": string, "who": string|null, "date": "YYYY-MM-DD"|null, "time": "HH:MM"|null, "where": string|null}],
  "action_items": [{"task": string, "owner": string|null, "due": "YYYY-MM-DD"|null}],
  "open_questions": string[],
  "events": [{"title": string, "date": "YYYY-MM-DD", "start_time": "HH:MM"|null, "end_time": "HH:MM"|null,
@@ -103,7 +106,16 @@ export function coerceDigest(raw) {
   return {
     headline: str(r.headline),
     key_points: strs(r.key_points),
-    decisions: strs(r.decisions),
+    decisions: (Array.isArray(r.decisions) ? r.decisions : [])
+      .map((d) => (typeof d === 'string' ? { what: d } : d && typeof d === 'object' ? d : {}))
+      .filter((d) => str(d.what).trim())
+      .map((d) => ({
+        what: str(d.what),
+        who: strOrNull(d.who),
+        date: /^\d{4}-\d{2}-\d{2}$/.test(str(d.date)) ? str(d.date) : null,
+        time: /^\d{1,2}:\d{2}$/.test(str(d.time)) ? str(d.time) : null,
+        where: strOrNull(d.where),
+      })),
     action_items: (Array.isArray(r.action_items) ? r.action_items : [])
       .filter((a) => a && str(a.task).trim())
       .map((a) => ({ task: str(a.task), owner: strOrNull(a.owner), due: strOrNull(a.due) })),

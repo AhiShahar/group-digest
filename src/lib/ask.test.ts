@@ -55,7 +55,8 @@ describe('across groups', () => {
       chats,
       [
         d('1', 'a', 3, { events: [ev('Zoo trip', '2026-11-26', '08:00'), ev('Old', '2026-11-01')], action_items: [{ task: 'Pay 20 NIS', owner: null, due: '2026-11-24' }] }),
-        d('2', 'a', 1, { events: [ev('Zoo trip', '2026-11-29', '09:00')], decisions: ['Trip moved to Sunday'] }),
+        d('2', 'a', 1, { events: [ev('Zoo trip', '2026-11-29', '09:00')], decisions: [{ what: 'Trip moved to Sunday', who: 'Dana', date: '2026-11-29', time: null, where: null }] }),
+        d('5', 'a', 2, { decisions: [{ what: 'Trip moved to Sunday', who: null, date: null, time: null, where: null }] }),
         d('3', 'b', 2, { action_items: [{ task: 'Read Dune', owner: 'You', due: null }] }),
         d('4', 'b', 40, { action_items: [{ task: 'Too old', owner: null, due: null }] }),
       ],
@@ -63,6 +64,7 @@ describe('across groups', () => {
     );
     expect(ov.dates.map((x) => `${x.e.title} ${x.e.date}`)).toEqual(['Zoo trip 2026-11-29']);
     expect(ov.todos.map((t) => t.task)).toEqual(['Pay 20 NIS', 'Read Dune']);
-    expect(ov.decisions[0].text).toBe('Trip moved to Sunday');
+    expect(ov.decisions).toHaveLength(1); // the same decision in two digests shows once, from the newer
+    expect(ov.decisions[0].d.who).toBe('Dana');
   });
 });
