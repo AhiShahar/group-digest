@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod';
 import {
   DigestSchema,
+  normalizeDigest,
   SCHEMA_HINT,
   SYSTEM_PROMPT,
   buildUserPrompt,
@@ -16,7 +17,7 @@ import {
 
 import type { ProviderSettings } from './providerInfo';
 import { upgradeDigest } from './decisions';
-import { isModelGone, rankModels } from './models';
+import { canTryAnotherModel, isTransient, rankModels } from './models';
 import { z } from 'zod';
 import { ASK_HINT, ASK_SYSTEM, AnswerSchema, type Answer } from './ask';
 export type { ProviderSettings };
@@ -126,7 +127,9 @@ async function callGemini(s: ProviderSettings, system: string, user: string, sha
     promptFeedback?: { blockReason?: string };
   };
   if (data.promptFeedback?.blockReason) throw new Error(`Gemini blocked the request (${data.promptFeedback.blockReason}).`);
-  const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('') ?? '';
+  const cand = data.candidates?.[0];
+  const text = cand?.content?.parts?.map((p) => p.text ?? '').join('') ?? '';
+  if (!text.trim()) throw new Error(`Gemini sent back an empty answer${cand?.finishReason ? ` (finish reason ${cand.finishReason})` : ''}.`);
   return extractJson(text);
 }
 
@@ -177,10 +180,11 @@ async function assertOk(res: Response): Promise<void> {
   } catch {
     detail = res.statusText;
   }
-  if (res.status === 401 || res.status === 403) throw new Error(`The provider rejected the key (${res.status}). ${detail}`);
-  if (res.status === 429) throw new Error(`The AI is busy or the free daily limit is used up (429). Try again in a minute, or tomorrow. ${detail}`);
-  if (res.status === 402) throw new Error(`The AI account has no credit left (402). ${detail}`);
-  throw new Error(`Provider error ${res.status}: ${detail}`);
+  const fail = (m: string) => Object.assign(new Error(m), { status: res.status });
+  if (res.status === 401 || res.status === 403) throw fail(`The provider rejected the key (${res.status}). ${detail}`);
+  if (res.status === 429) throw fail(`The AI is busy or the free limit is used up (429). ${detail}`);
+  if (res.status === 402) throw fail(`The AI account has no credit left (402). ${detail}`);
+  throw fail(`Provider error ${res.status}: ${detail}`);
 }
 
 // ---------- full digest ----------
@@ -193,7 +197,7 @@ async function digestOnce(s: ProviderSettings, user: string): Promise<Digest> {
     if (!(e instanceof SyntaxError) && !String(e).includes('did not return JSON')) throw e;
     raw = await callOnce(s, SYSTEM_PROMPT, user, 'Your last reply was not valid JSON. Reply with only the JSON object.');
   }
-  const parsed = DigestSchema.safeParse(upgradeDigest(raw));
+  const parsed = DigestSchema.safeParse(normalizeDigest(upgradeDigest(raw)));
   if (parsed.success) return parsed.data;
   // Weaker models: retry once with the validation errors.
   const retry = await callOnce(
@@ -205,7 +209,14 @@ async function digestOnce(s: ProviderSettings, user: string): Promise<Digest> {
       .map((i) => `${i.path.join('.')}: ${i.message}`)
       .join('; ')}. Reply with only a corrected JSON object.`,
   );
-  return DigestSchema.parse(upgradeDigest(retry));
+  const again = DigestSchema.safeParse(normalizeDigest(upgradeDigest(retry)));
+  if (again.success) return again.data;
+  throw new Error(
+    `The answer was not in the shape the app needs: ${again.error.issues
+      .slice(0, 3)
+      .map((i) => `${i.path.join('.') || 'reply'} ${i.message}`)
+      .join('; ')}.`,
+  );
 }
 
 const listCache = new Map<string, string[]>();
@@ -224,7 +235,9 @@ export async function modelCandidates(s: ProviderSettings): Promise<string[]> {
     }
   }
   const ranked = rankModels(s.provider, ids);
-  const order = s.model ? [s.model, ...ranked.filter((m) => m !== s.model)] : ranked;
+  const good = lastGood(s);
+  const first = s.model || (good && ranked.includes(good) ? good : '');
+  const order = first ? [first, ...ranked.filter((m) => m !== first)] : ranked;
   if (!order.length) throw new Error('No models found for this AI. Type a model name in AI and settings.');
   return order;
 }
@@ -238,28 +251,14 @@ export async function summarize(
   const msgs = req.messages.filter((m) => m.text.trim() || m.media);
   if (!msgs.length) throw new Error('No messages in this time range.');
   const order = await modelCandidates(s);
-  let pick = 0;
-  let cur: ProviderSettings = { ...s, model: order[0] };
-  onModel?.(cur.model);
+  const state = { pick: 0 };
   const chunks = chunkMessages(msgs);
   const parts: Digest[] = [];
   for (let i = 0; i < chunks.length; i++) {
     onProgress?.(chunks.length > 1 ? `Summarizing part ${i + 1} of ${chunks.length}…` : 'Summarizing…');
     const note = chunks.length > 1 ? `This is part ${i + 1} of ${chunks.length} of the chat, in order.` : '';
     const prompt = buildUserPrompt(req, formatTranscript(chunks[i]), note);
-    for (;;) {
-      try {
-        parts.push(await digestOnce(cur, prompt));
-        break;
-      } catch (e) {
-        // The model was retired or renamed: move on to the next one on the provider's list.
-        if (!isModelGone(e) || pick + 1 >= Math.min(order.length, 4)) throw e;
-        pick++;
-        cur = { ...s, model: order[pick] };
-        onModel?.(cur.model);
-        onProgress?.(`Switching to ${cur.model}…`);
-      }
-    }
+    parts.push(await withFallback(s, order, state, (cur) => digestOnce(cur, prompt), onModel, onProgress));
   }
   const merged = mergeDigests(parts);
   merged.events = sanitizeEvents(merged.events, msgs[0].ts, msgs[msgs.length - 1].ts);
@@ -272,27 +271,86 @@ export async function summarize(
 export async function ask(s: ProviderSettings, user: string, onModel?: (m: string) => void): Promise<Answer> {
   const order = await modelCandidates(s);
   const shape: Shape = { schema: AnswerSchema, hint: ASK_HINT };
-  let last: unknown;
-  for (const model of order.slice(0, 4)) {
-    const cur = { ...s, model };
-    onModel?.(model);
+  return withFallback(s, order, { pick: 0 }, async (cur) => {
+    let raw: unknown;
     try {
-      let raw: unknown;
-      try {
-        raw = await callOnce(cur, ASK_SYSTEM, user, undefined, shape);
-      } catch (e) {
-        if (!(e instanceof SyntaxError) && !String(e).includes('did not return JSON')) throw e;
-        raw = await callOnce(cur, ASK_SYSTEM, user, 'Your last reply was not valid JSON. Reply with only the JSON object.', shape);
-      }
-      const parsed = AnswerSchema.safeParse(raw);
-      if (parsed.success) return parsed.data;
-      const r = raw as { answer?: unknown };
-      if (typeof r?.answer === 'string') return { answer: r.answer, sources: [] };
-      throw new Error('The AI answered in an unexpected shape.');
+      raw = await callOnce(cur, ASK_SYSTEM, user, undefined, shape);
     } catch (e) {
-      last = e;
-      if (!isModelGone(e)) throw e;
+      if (!(e instanceof SyntaxError) && !String(e).includes('did not return JSON')) throw e;
+      raw = await callOnce(cur, ASK_SYSTEM, user, 'Your last reply was not valid JSON. Reply with only the JSON object.', shape);
     }
+    const parsed = AnswerSchema.safeParse(raw);
+    if (parsed.success) return parsed.data;
+    const r = raw as { answer?: unknown };
+    if (typeof r?.answer === 'string') return { answer: r.answer, sources: [] };
+    throw new Error('The AI answered in an unexpected shape.');
+  }, onModel);
+}
+
+// ---------- trying models in turn ----------
+
+const GOOD_KEY = 'nutshell.workingModel.';
+
+function lastGood(s: ProviderSettings): string | null {
+  try {
+    return localStorage.getItem(GOOD_KEY + s.provider);
+  } catch {
+    return null;
   }
-  throw last;
+}
+
+function rememberGood(s: ProviderSettings, model: string): void {
+  if (s.model) return; // the user picked a model themselves
+  try {
+    localStorage.setItem(GOOD_KEY + s.provider, model);
+  } catch {
+    /* private mode */
+  }
+}
+
+const errText = (e: unknown) => (e instanceof Error ? e.message : String(e)).trim();
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const MAX_MODELS = 5;
+
+/**
+ * Run one request, moving down the model list when a model fails for a reason
+ * another model might not have (retired, paid-only on the free tier, overloaded,
+ * unreadable reply). A busy model gets one more try first. `state.pick` carries
+ * the working model across the parts of a long chat. When every model fails,
+ * the error lists what each one said.
+ */
+export async function withFallback<T>(
+  s: ProviderSettings,
+  order: string[],
+  state: { pick: number },
+  run: (cur: ProviderSettings) => Promise<T>,
+  onModel?: (model: string) => void,
+  onProgress?: (note: string) => void,
+): Promise<T> {
+  const max = Math.min(order.length, MAX_MODELS);
+  const tries: string[] = [];
+  for (; state.pick < max; state.pick++) {
+    const cur: ProviderSettings = { ...s, model: order[state.pick] };
+    onModel?.(cur.model);
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const value = await run(cur);
+        rememberGood(s, cur.model);
+        return value;
+      } catch (e) {
+        if (attempt === 0 && isTransient(e)) {
+          onProgress?.('The AI is busy, trying again…');
+          await sleep(2500);
+          continue;
+        }
+        tries.push(`${cur.model}: ${errText(e)}`);
+        if (!canTryAnotherModel(e)) {
+          throw new Error(tries.length > 1 ? `Tried ${tries.length} models.\n${tries.join('\n')}` : `${cur.model}: ${errText(e)}`);
+        }
+        break;
+      }
+    }
+    if (state.pick + 1 < max) onProgress?.(`Trying another model (${order[state.pick + 1]})…`);
+  }
+  throw new Error(`Tried ${tries.length} model${tries.length === 1 ? '' : 's'} and none worked.\n${tries.join('\n')}`);
 }

@@ -13,6 +13,7 @@ import { finishOpenRouterSignIn, startOpenRouterSignIn } from './lib/openrouter'
 import { parseChatText, readExportFile } from './lib/parser';
 import { PROVIDERS, providerInfo, type ProviderId } from './lib/providerInfo';
 import { rankModels } from './lib/models';
+import { APP_VERSION } from './lib/freshness';
 import { findMatchingChat } from './lib/match';
 import { ExportSteps, OpenWhatsApp, UpdateNudge } from './ExportHelp';
 import { DEFAULT_REMINDERS } from './lib/reminders';
@@ -792,28 +793,47 @@ function digestAsText(chatName: string, d: Digest): string {
 }
 
 function friendlyError(msg: string): { title: string; hint: string } {
-  if (/rejected the key|401|403|API key not valid|invalid.*key/i.test(msg))
+  const lines = msg.split('\n').filter((l) => l.includes(': '));
+  const tried = /^Tried \d+ model/.test(msg);
+  const all = (re: RegExp) => lines.length > 0 && lines.every((l) => re.test(l));
+  if (/rejected the key|\b401\b|\b403\b|API key not valid|invalid.*key/i.test(msg))
     return { title: "The AI didn't accept your key", hint: 'Check the key in AI and settings, or sign in again.' };
-  if (/\b429\b|free daily limit|rate limit|quota/i.test(msg))
-    return { title: 'The free limit is used up for now', hint: 'Try again in a minute, or tomorrow.' };
-  if (/\b402\b|no credit/i.test(msg)) return { title: 'No credit left on the AI account', hint: 'Add credit with the provider, or switch to a free option.' };
-  if (/no longer available|not found|deprecated|retired|404|No models found/i.test(msg))
-    return { title: "That AI model isn't available", hint: 'Open AI and settings and tap Check connection, or try another AI there.' };
-  if (/Failed to fetch|NetworkError|Load failed|network/i.test(msg))
+  if (/Failed to fetch|NetworkError|Load failed|network connection/i.test(msg))
     return { title: "Couldn't reach the AI", hint: 'Check your internet connection and try again.' };
   if (/No messages/i.test(msg)) return { title: 'Nothing to summarize', hint: 'Pick a longer time range or import a newer export.' };
-  return { title: 'The summary didn\'t work', hint: 'Try again. If it keeps failing, try another AI in AI and settings.' };
+  if (/\b402\b|no credit/i.test(msg)) return { title: 'No credit left on the AI account', hint: 'Add credit with the provider, or switch to a free option.' };
+  if (tried ? all(/\b429\b|quota|rate limit/i) : /\b429\b|free limit|rate limit|quota/i.test(msg))
+    return { title: 'The free limit is used up for now', hint: 'Free AI has a limit per minute and per day. Wait a minute and try again, or try tomorrow.' };
+  if (tried ? all(/\b5\d\d\b|overloaded|UNAVAILABLE|high demand/i) : /\b5\d\d\b|overloaded|UNAVAILABLE|high demand/i.test(msg))
+    return { title: 'The AI is overloaded right now', hint: 'This happens on the free tier at busy times. Try again in a few minutes.' };
+  if (tried)
+    return { title: "None of the AI's models worked", hint: 'Try again in a few minutes. If it keeps failing, open Details, copy it, and send it to whoever set up Nutshell for you.' };
+  if (/no longer available|not found|deprecated|retired|\b404\b|No models found/i.test(msg))
+    return { title: "That AI model isn't available", hint: 'Open AI and settings and tap Check connection, or try another AI there.' };
+  return { title: "The summary didn't work", hint: 'Try again. If it keeps failing, open Details and copy the text, or try another AI in AI and settings.' };
 }
 
 function ErrorBox({ message }: { message: string }) {
   const f = friendlyError(message);
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(`Nutshell ${APP_VERSION}\n${message}`);
+      setCopied(true);
+    } catch {
+      /* clipboard blocked: the text is still visible to select */
+    }
+  };
   return (
     <div className="error-box" role="alert">
       <strong>{f.title}</strong>
       <span>{f.hint}</span>
       <details>
         <summary>Details</summary>
-        <p>{message}</p>
+        <p className="error-detail">{message}</p>
+        <button className="link small" onClick={copy}>
+          {copied ? 'Copied' : 'Copy details'}
+        </button>
       </details>
     </div>
   );

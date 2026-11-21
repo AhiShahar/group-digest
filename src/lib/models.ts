@@ -64,3 +64,42 @@ export function isModelGone(e: unknown): boolean {
   if (/Provider error 404/.test(msg)) return true;
   return /(no longer available|not found|not_found|does not exist|deprecated|decommissioned|retired|unknown model|invalid model|model .*not (?:supported|available))/i.test(msg);
 }
+
+function statusOf(e: unknown): number | undefined {
+  const s = (e as { status?: number })?.status;
+  if (typeof s === 'number') return s;
+  const m = String((e as Error)?.message ?? e).match(/\((\d{3})\)|Provider error (\d{3})/);
+  return m ? Number(m[1] ?? m[2]) : undefined;
+}
+
+/** The key itself is wrong: no other model will help. */
+export function isKeyProblem(e: unknown): boolean {
+  const s = statusOf(e);
+  const msg = String((e as Error)?.message ?? e);
+  return s === 401 || s === 403 || /rejected the key|API key not valid|invalid api key/i.test(msg);
+}
+
+/** The phone is offline or the provider can't be reached at all. */
+export function isNetworkProblem(e: unknown): boolean {
+  return /Failed to fetch|NetworkError|Load failed|network connection/i.test(String((e as Error)?.message ?? e));
+}
+
+/** A short hiccup on the provider's side: worth one more try on the same model. */
+export function isTransient(e: unknown): boolean {
+  const s = statusOf(e);
+  if (s !== undefined && s >= 500) return true;
+  return /overloaded|UNAVAILABLE|try again later|temporarily|high demand|internal error/i.test(String((e as Error)?.message ?? e));
+}
+
+/**
+ * Whether another model on the same account might work. True for almost
+ * everything: a model that is gone, paid-only on the free tier (429 with a
+ * zero quota), overloaded, rejecting the request (400), or replying in a shape
+ * the app can't read. False only when no model could help.
+ */
+export function canTryAnotherModel(e: unknown): boolean {
+  if (isKeyProblem(e) || isNetworkProblem(e)) return false;
+  const msg = String((e as Error)?.message ?? e);
+  if (/No messages in this time range|credit left|\(402\)/i.test(msg)) return false;
+  return true;
+}
