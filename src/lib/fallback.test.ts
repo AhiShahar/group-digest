@@ -71,3 +71,27 @@ describe('withFallback', () => {
     ).rejects.toThrow(/Tried 2 models and none worked.\na: Provider error 400: nope a\nb: Provider error 400/);
   });
 });
+
+describe('modelCandidates', () => {
+  it('starts with the picked model and keeps only known Gemini models as backups', async () => {
+    const { modelCandidates } = await import('./providers');
+    const orig = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          models: ['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-4-carbon', 'gemini-3.1-flash-lite'].map((n) => ({
+            name: `models/${n}`,
+            supportedGenerationMethods: ['generateContent'],
+          })),
+        }),
+      )) as typeof fetch;
+    try {
+      const order = await modelCandidates({ ...s, apiKey: 'test-list-key', model: 'gemini-3.5-flash-lite' });
+      expect(order).toEqual(['gemini-3.5-flash-lite', 'gemini-3.8-flash', 'gemini-3.1-flash-lite']);
+      const dflt = await modelCandidates({ ...s, apiKey: 'test-list-key', model: '' });
+      expect(dflt[0]).toBe('gemini-3.8-flash');
+    } finally {
+      globalThis.fetch = orig;
+    }
+  });
+});

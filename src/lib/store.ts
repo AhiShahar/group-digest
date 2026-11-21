@@ -1,4 +1,5 @@
 import { LEGACY_DEFAULTS } from './models';
+import { providerInfo } from './providerInfo';
 import { DEFAULT_REMINDERS, type ReminderPrefs } from './reminders';
 // Everything is stored on this device only, in IndexedDB.
 import type { Digest } from './digest';
@@ -124,8 +125,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
 
 export async function loadSettings(): Promise<AppSettings> {
   const s = { ...DEFAULT_SETTINGS, ...((await getKv<AppSettings>('settings')) ?? {}) };
-  // Older builds saved fixed model IDs that providers have since retired.
-  if (LEGACY_DEFAULTS.has(s.model)) s.model = '';
+  // Older builds saved retired model IDs, or '' for the old automatic choice: use the provider's main model.
+  if (!s.model || LEGACY_DEFAULTS.has(s.model)) s.model = providerInfo(s.provider)?.defaultModel ?? '';
   return s;
 }
 export async function saveSettings(s: AppSettings): Promise<void> {

@@ -15,7 +15,7 @@ import {
   type DigestRequest,
 } from './digest';
 
-import type { ProviderSettings } from './providerInfo';
+import { providerInfo, type ProviderSettings } from './providerInfo';
 import { upgradeDigest } from './decisions';
 import { canTryAnotherModel, isTransient, rankModels } from './models';
 import { z } from 'zod';
@@ -221,25 +221,38 @@ async function digestOnce(s: ProviderSettings, user: string): Promise<Digest> {
 
 const listCache = new Map<string, string[]>();
 
-/** Models to try, best first: the user's chosen model (if any), then the provider's newest suitable ones. */
+/**
+ * Models to try, best first: the model picked in settings, then the other known
+ * main models for that AI as backups. Backups the provider no longer lists are
+ * left out. Only a custom server with no known list falls back to its own list.
+ */
 export async function modelCandidates(s: ProviderSettings): Promise<string[]> {
+  const known = providerInfo(s.provider).models.map((m) => m.id);
+  const chosen = s.model || known[0] || '';
+  if (known.length) {
+    let ids: string[] | null = null;
+    try {
+      ids = await cachedList(s);
+    } catch {
+      /* no list: keep every known model */
+    }
+    const backups = known.filter((m) => m !== chosen && (!ids || ids.includes(m)));
+    return chosen ? [chosen, ...backups] : backups;
+  }
+  if (chosen) return [chosen];
+  const ranked = rankModels(s.provider, await cachedList(s));
+  if (!ranked.length) throw new Error('No models found for this AI. Type a model name in AI and settings.');
+  return ranked;
+}
+
+async function cachedList(s: ProviderSettings): Promise<string[]> {
   const key = `${s.provider}|${s.baseUrl}|${s.apiKey.slice(-8)}`;
   let ids = listCache.get(key);
   if (!ids) {
-    try {
-      ids = await listModels(s);
-      listCache.set(key, ids);
-    } catch (e) {
-      if (!s.model) throw e;
-      ids = [];
-    }
+    ids = await listModels(s);
+    listCache.set(key, ids);
   }
-  const ranked = rankModels(s.provider, ids);
-  const good = lastGood(s);
-  const first = s.model || (good && ranked.includes(good) ? good : '');
-  const order = first ? [first, ...ranked.filter((m) => m !== first)] : ranked;
-  if (!order.length) throw new Error('No models found for this AI. Type a model name in AI and settings.');
-  return order;
+  return ids;
 }
 
 export async function summarize(
@@ -289,25 +302,6 @@ export async function ask(s: ProviderSettings, user: string, onModel?: (m: strin
 
 // ---------- trying models in turn ----------
 
-const GOOD_KEY = 'nutshell.workingModel.';
-
-function lastGood(s: ProviderSettings): string | null {
-  try {
-    return localStorage.getItem(GOOD_KEY + s.provider);
-  } catch {
-    return null;
-  }
-}
-
-function rememberGood(s: ProviderSettings, model: string): void {
-  if (s.model) return; // the user picked a model themselves
-  try {
-    localStorage.setItem(GOOD_KEY + s.provider, model);
-  } catch {
-    /* private mode */
-  }
-}
-
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e)).trim();
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const MAX_MODELS = 5;
@@ -335,7 +329,6 @@ export async function withFallback<T>(
     for (let attempt = 0; ; attempt++) {
       try {
         const value = await run(cur);
-        rememberGood(s, cur.model);
         return value;
       } catch (e) {
         if (attempt === 0 && isTransient(e)) {
