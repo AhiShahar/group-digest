@@ -3,6 +3,7 @@ import { buildIcs, downloadFile, googleCalendarUrl, outlookCalendarUrl, safeFile
 import type { Digest, DigestEvent } from './lib/digest';
 import LiveSync from './LiveSync';
 import Backup from './Backup';
+import { AppInfo, UpdateBanner } from './AppUpdate';
 import Across from './Across';
 import { autoBackup } from './lib/backup';
 import { fetchNotices, lastDigests, loadPairing, pullMessages, pushConfig, savePairing, type SyncNotice } from './lib/liveSync';
@@ -361,6 +362,7 @@ export default function App() {
             </button>
           </div>
         )}
+        <UpdateBanner />
         {iosInstall && <IosInstallCard onDismiss={() => setIosInstall(false)} />}
         {installEvt && (
           <div className="banner subtle">
@@ -1221,6 +1223,8 @@ function Settings({
           This is the lite version. To save WhatsApp messages automatically instead of exporting, install the full version of Nutshell.
         </p>
       )}
+
+      <AppInfo />
 
       <h2>Privacy</h2>
       <div className="card">
