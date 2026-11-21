@@ -180,3 +180,71 @@ export function sanitizeEvents(events: DigestEvent[], windowStart: number, windo
       return out;
     });
 }
+
+// ---------- lenient reading of model output ----------
+
+const str = (v: unknown): string | null => {
+  if (typeof v === 'string') return v;
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+  return null;
+};
+const nstr = (v: unknown): string | null => {
+  const s = str(v);
+  return s && s.trim() && !/^(null|none|n\/a)$/i.test(s.trim()) ? s : null;
+};
+const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : v == null || v === '' ? [] : [v]);
+const obj = (v: unknown): Record<string, unknown> | null => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null);
+const strings = (v: unknown): string[] =>
+  arr(v)
+    .map((x) => str(x) ?? nstr(obj(x)?.text) ?? nstr(obj(x)?.point) ?? nstr(obj(x)?.question))
+    .filter((x): x is string => !!x && !!x.trim());
+
+/**
+ * Models often bend the JSON shape a little: a missing empty list, a missing
+ * null field, a wrapper object, "High" instead of "high". Fix those in code so
+ * a perfectly good summary is not thrown away. Anything unreadable is dropped.
+ */
+export function normalizeDigest(raw: unknown): unknown {
+  let r = obj(raw);
+  if (!r) return raw;
+  // {"digest": {...}} or {"summary": {...}} wrappers
+  if (!('headline' in r) && !('key_points' in r)) {
+    const inner = Object.values(r).map(obj).find((o) => o && ('headline' in o || 'key_points' in o));
+    if (inner) r = inner;
+  }
+  const known = ['headline', 'summary', 'key_points', 'decisions', 'action_items', 'open_questions', 'events'];
+  if (!known.some((k) => k in r!)) return raw;
+  const decisions = arr(r.decisions)
+    .map((x) => (typeof x === 'string' ? { what: x } : obj(x)))
+    .filter((x): x is Record<string, unknown> => !!x && !!nstr(x.what ?? x.decision ?? x.text))
+    .map((x) => ({
+      what: nstr(x.what ?? x.decision ?? x.text)!,
+      who: nstr(x.who),
+      date: nstr(x.date),
+      time: nstr(x.time),
+      where: nstr(x.where),
+    }));
+  const action_items = arr(r.action_items)
+    .map((x) => (typeof x === 'string' ? { task: x } : obj(x)))
+    .filter((x): x is Record<string, unknown> => !!x && !!nstr(x.task ?? x.what ?? x.text))
+    .map((x) => ({ task: nstr(x.task ?? x.what ?? x.text)!, owner: nstr(x.owner ?? x.who), due: nstr(x.due ?? x.date) }));
+  const events = arr(r.events)
+    .map(obj)
+    .filter((x): x is Record<string, unknown> => !!x && !!nstr(x.title) && !!nstr(x.date))
+    .map((x) => {
+      const c = String(x.confidence ?? '').toLowerCase();
+      return {
+        title: nstr(x.title)!,
+        date: nstr(x.date)!,
+        start_time: nstr(x.start_time ?? x.time),
+        end_time: nstr(x.end_time),
+        location: nstr(x.location ?? x.where),
+        notes: nstr(x.notes),
+        source_quote: str(x.source_quote) ?? '',
+        confidence: (c === 'high' || c === 'medium' || c === 'low' ? c : 'medium') as 'high' | 'medium' | 'low',
+      };
+    });
+  const key_points = strings(r.key_points);
+  const headline = nstr(r.headline) ?? nstr(r.summary) ?? key_points[0] ?? '';
+  return { headline, key_points, decisions, action_items, open_questions: strings(r.open_questions), events };
+}
