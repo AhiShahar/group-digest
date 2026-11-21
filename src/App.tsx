@@ -11,8 +11,9 @@ import { openProblem, refreshAndroidWatch } from './lib/schedule';
 import { addEventNative, bridge, canCapture, captureStatus, isAndroidApp, peekCaptured, takeNativeShare, type CaptureStatus } from './lib/android';
 import { finishOpenRouterSignIn, startOpenRouterSignIn } from './lib/openrouter';
 import { parseChatText, readExportFile } from './lib/parser';
-import { PROVIDERS, providerInfo, type ProviderId } from './lib/providerInfo';
-import { rankModels } from './lib/models';
+import { PROVIDERS, modelLabel, providerInfo, type ProviderId } from './lib/providerInfo';
+
+const OTHER = '__other__';
 import { APP_VERSION } from './lib/freshness';
 import { findMatchingChat } from './lib/match';
 import { ExportSteps, OpenWhatsApp, UpdateNudge } from './ExportHelp';
@@ -741,7 +742,7 @@ function ChatView(props: {
             {busy ?? `Summarize ${selected.length} messages`}
           </button>
           <span className="muted small">
-            {settings.model ? `Using ${settings.model}` : 'Using the newest model (automatic)'}
+            Using {modelLabel(settings.model || providerInfo(settings.provider).defaultModel, settings.provider) || 'your model'}
           </span>
         </div>
         {!selected.length && chat.messages.length > 0 && (
@@ -1074,12 +1075,15 @@ function Settings({
   onWiped: () => void;
 }) {
   const [models, setModels] = useState<string[]>([]);
+  const [otherOpen, setOtherOpen] = useState(false);
   const [checking, setChecking] = useState(false);
   const [showKey, setShowKey] = useState(false);
   const info = providerInfo(settings.provider);
+  const custom = otherOpen || (!!settings.model && info.models.length > 0 && !info.models.some((m) => m.id === settings.model));
 
   const setProvider = (p: ProviderId) => {
     setModels([]);
+    setOtherOpen(false);
     onChange({ ...settings, provider: p, apiKey: '', model: providerInfo(p).defaultModel });
   };
 
@@ -1089,8 +1093,8 @@ function Settings({
       const { listModels } = await providers();
       const list = await listModels(settings);
       setModels(list);
-      const auto = rankModels(settings.provider, list)[0];
-      onToast(settings.model ? `Connected. ${list.length} models available.` : `Connected. Automatic choice: ${auto ?? 'none found'}.`);
+      const missing = settings.model && info.models.length && !list.includes(settings.model);
+      onToast(missing ? `Connected, but ${settings.model} isn't offered to this key. Pick another model.` : `Connected. ${list.length} models available.`);
     } catch (e) {
       onToast(e instanceof Error ? e.message : String(e));
     } finally {
@@ -1174,30 +1178,48 @@ function Settings({
           </label>
         )}
 
-        <label>
-          Model
-          <input
-            list="models"
-            placeholder="Automatic (newest fast model)"
-            value={settings.model}
-            onChange={(e) => onChange({ ...settings, model: e.target.value.trim() })}
-          />
-          <datalist id="models">
-            {models.map((m) => (
-              <option key={m} value={m} />
-            ))}
-          </datalist>
-        </label>
+        {info.models.length > 0 && (
+          <label>
+            Model
+            <select
+              value={custom ? OTHER : settings.model || info.defaultModel}
+              onChange={(e) => {
+                const other = e.target.value === OTHER;
+                setOtherOpen(other);
+                onChange({ ...settings, model: other ? '' : e.target.value });
+              }}
+            >
+              {info.models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
+              <option value={OTHER}>Other model…</option>
+            </select>
+          </label>
+        )}
+        {(custom || !info.models.length) && (
+          <label>
+            {info.models.length ? 'Model name' : 'Model'}
+            <input
+              list="models"
+              autoCapitalize="off"
+              spellCheck={false}
+              placeholder={info.models.length ? 'e.g. ' + info.models[0].id : 'e.g. llama3.3'}
+              value={settings.model}
+              onChange={(e) => onChange({ ...settings, model: e.target.value.trim() })}
+            />
+            <datalist id="models">
+              {models.map((m) => (
+                <option key={m} value={m} />
+              ))}
+            </datalist>
+          </label>
+        )}
         <p className="muted small">
-          Leave empty and the app picks the newest fast model, and switches by itself if the provider retires one.
-          {settings.model && (
-            <>
-              {' '}
-              <button className="link inline" onClick={() => onChange({ ...settings, model: '' })}>
-                Use automatic
-              </button>
-            </>
-          )}
+          {info.models.length
+            ? 'If this model is busy or unavailable, Nutshell tries the other models in this list and shows which one it used.'
+            : 'Type the model name your server uses. Leave it empty to use the first model the server lists.'}
         </p>
         <div className="row">
           <button onClick={check} disabled={checking || (info.needsKey && !settings.apiKey)}>
