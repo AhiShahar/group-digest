@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { formatTranscript, type Decision, type DigestEvent } from './digest';
 import type { ChatMessage } from './parser';
 import type { StoredChat, StoredDigest } from './store';
+import { chatTitle } from './title';
 
 export const AnswerSchema = z.object({
   answer: z.string().describe('A short, direct answer. Say plainly if the messages do not answer it.'),
@@ -67,7 +68,7 @@ export function search(chats: StoredChat[], q: string, limit = 100): Hit[] {
       if (!m.text) continue;
       const hay = `${m.sender ?? ''} ${m.text}`.toLowerCase();
       const matched = ts.filter((t) => hay.includes(t)).length;
-      if (matched >= need) hits.push({ chatId: c.id, chat: c.name, m, score: scoreText(hay, ts) });
+      if (matched >= need) hits.push({ chatId: c.id, chat: chatTitle(c), m, score: scoreText(hay, ts) });
     }
   }
   return hits.sort((a, b) => b.score - a.score || b.m.ts - a.m.ts).slice(0, limit);
@@ -109,10 +110,10 @@ export function askContext(chats: StoredChat[], question: string, maxChars = 120
   const order = chats.filter((c) => picked.has(c.id)).sort((a, b) => (b.messages.at(-1)?.ts ?? 0) - (a.messages.at(-1)?.ts ?? 0));
   for (const c of order) {
     let msgs = [...picked.get(c.id)!].sort((a, b) => a - b).map((i) => c.messages[i]);
-    let block = `## Group: ${c.name}\n${formatTranscript(msgs)}`;
+    let block = `## Group: ${chatTitle(c)}\n${formatTranscript(msgs)}`;
     while (size + block.length > maxChars && msgs.length > 20) {
       msgs = msgs.slice(Math.ceil(msgs.length / 4));
-      block = `## Group: ${c.name}\n${formatTranscript(msgs)}`;
+      block = `## Group: ${chatTitle(c)}\n${formatTranscript(msgs)}`;
     }
     if (size + block.length > maxChars) break;
     parts.push(block);
@@ -158,7 +159,7 @@ const norm = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
  * `days` days). A newer digest wins when two mention the same event.
  */
 export function overview(chats: StoredChat[], digests: StoredDigest[], today: string, days = 21, now = Date.now()): Overview {
-  const name = new Map(chats.map((c) => [c.id, c.name]));
+  const name = new Map(chats.map((c) => [c.id, chatTitle(c)]));
   const recent = digests.filter((d) => name.has(d.chatId) && d.createdAt >= now - days * 864e5).sort((a, b) => a.createdAt - b.createdAt);
   const todos = new Map<string, TodoItem>();
   const dates = new Map<string, DateItem>();

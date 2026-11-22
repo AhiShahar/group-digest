@@ -246,3 +246,33 @@ ul.decisions dd { margin: 0; }
 /* Coming up: date and title on one line, group and place under it */
 ul.card.plain li.when-row button.link.inline { text-align: start; }
 ul.card.plain li.when-row .sub { display: block; }
+
+/* Group name with a Rename link beside it */
+.title-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+.title-row h1 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.rename {
+  margin: 8px 0 12px;
+}
+
+/* Summarize all, above the group list */
+.summarize-all .row {
+  align-items: center;
+}
+.all-results {
+  list-style: none;
+  padding: 0;
+  margin: 10px 0 4px;
+  display: grid;
+  gap: 8px;
+}
+.all-results li {
+  overflow-wrap: anywhere;
+}
