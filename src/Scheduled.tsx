@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import {
   DEFAULT_SCHEDULE,
   fetchNotices,
+  olderThan,
   serverCanUse,
   type BridgeState,
   type DigestSchedule,
@@ -101,7 +102,8 @@ export default function Scheduled({
   const [busy, setBusy] = useState(false);
   const noticesOn = useNoticesOn(p);
   const canServer = serverCanUse(settings);
-  const tooOld = st.version < '0.4.0';
+  const tooOld = olderThan(st.version, '0.4.0');
+  const twiceTooOld = d.on && d.freq === 'twice' && olderThan(st.version, '0.5.3');
   const synced = st.groups.filter((g) => p.groups.includes(g.id));
 
   const save = async (patch: Partial<DigestSchedule>) => {
@@ -109,7 +111,9 @@ export default function Scheduled({
     try {
       const next: DigestSchedule = { ...d, ...patch, tz: Intl.DateTimeFormat().resolvedOptions().timeZone || d.tz };
       if (next.on && (!next.models.length || patch.on)) next.models = await pickModels(settings);
-      await onUpdate({ ...p, digest: next });
+      // Twice a day needs server 0.5.3: ask the owner's server to install updates now.
+      const bump = next.on && next.freq === 'twice' && olderThan(st.version, '0.5.3') && p.role !== 'member' ? { update: Date.now() } : {};
+      await onUpdate({ ...p, ...bump, digest: next });
     } catch (e) {
       onToast(e instanceof Error ? e.message : String(e));
     }
@@ -143,9 +147,15 @@ export default function Scheduled({
               <select
                 value={d.on ? d.freq : 'off'}
                 disabled={busy || (!canServer && !d.on)}
-                onChange={(e) => save(e.target.value === 'off' ? { on: false } : { on: true, freq: e.target.value as DigestSchedule['freq'] })}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v === 'off') return save({ on: false });
+                  // Twice a day starts at 6 AM and 6 PM; the times can be changed after.
+                  save(v === 'twice' && d.freq !== 'twice' ? { on: true, freq: 'twice', hour: 6, minute: 0, hour2: 18, minute2: 0 } : { on: true, freq: v as DigestSchedule['freq'] });
+                }}
               >
                 <option value="off">Off</option>
+                <option value="twice">Twice a day</option>
                 <option value="daily">Every day</option>
                 <option value="weekly">Every week</option>
               </select>
@@ -176,7 +186,28 @@ export default function Scheduled({
                 />
               </label>
             )}
+            {d.on && d.freq === 'twice' && (
+              <label>
+                And at
+                <input
+                  type="time"
+                  value={`${pad(d.hour2 ?? 18)}:${pad(d.minute2 ?? 0)}`}
+                  disabled={busy}
+                  onChange={(e) => {
+                    const [h, m] = e.target.value.split(':').map(Number);
+                    if (!Number.isNaN(h)) save({ hour2: h, minute2: m || 0 });
+                  }}
+                />
+              </label>
+            )}
           </div>
+          {twiceTooOld && (
+            <p className="small warn">
+              {p.role === 'member'
+                ? 'The sync server needs an update for twice a day. Until it updates, you get one digest a day at the first time.'
+                : 'Your sync server is installing an update for twice a day. Until then you get one digest a day at the first time. If it has not updated in an hour, press Reboot on your instance in Oracle Cloud.'}
+            </p>
+          )}
           {d.on && (
             <>
               {synced.length > 1 && (
@@ -204,7 +235,7 @@ export default function Scheduled({
               )}
               <p className="small muted">
                 To do this, the server keeps the chosen groups' messages, encrypted with your key, for up to {d.freq === 'weekly' ? 'nine' : 'three'}{' '}
-                days. The first digest covers messages from when you turned this on. Groups with no new messages are skipped.
+                days. Each digest covers the new messages since the one before. The first digest covers messages from when you turned this on. Groups with no new messages are skipped.
               </p>
               <div className="row">
                 <button

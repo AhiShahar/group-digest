@@ -20,6 +20,7 @@ import { ExportSteps, OpenWhatsApp, UpdateNudge } from './ExportHelp';
 import { DEFAULT_REMINDERS } from './lib/reminders';
 import { disablePush } from './lib/webpush';
 import { splitActive } from './lib/active';
+import { chatTitle } from './lib/title';
 import { decisionText } from './lib/decisions';
 import { DecisionCards } from './Decisions';
 import { RemindAllButton, ReminderButton, ReminderSettings, RemindersContext, useReminderPrefs } from './Reminders';
@@ -318,6 +319,32 @@ export default function App() {
 
   const needsSetup = loaded && providerInfo(settings.provider).needsKey && !settings.apiKey;
 
+  // Summarize all: one digest per group with new messages, one after another. Lives here so it keeps going if you open a group.
+  const [allBusy, setAllBusy] = useState<string | null>(null);
+  const [allResults, setAllResults] = useState<AllResult[] | null>(null);
+  const summarizeAll = async () => {
+    if (providerInfo(settings.provider).needsKey && !settings.apiKey) return setView({ name: 'settings' });
+    const todo = (await listChats()).map((c) => ({ c, msgs: newMessages(c) })).filter((x) => x.msgs.length);
+    if (!todo.length) return setToast('No new messages in any group since the last summaries.');
+    setAllResults(null);
+    const out: AllResult[] = [];
+    for (const [i, { c, msgs }] of todo.entries()) {
+      setAllBusy(`Summarizing ${i + 1} of ${todo.length}: ${chatTitle(c)}…`);
+      try {
+        const { rec } = await summarizeChat(settings, c, msgs);
+        out.push({ chatId: c.id, title: chatTitle(c), headline: rec.digest.headline, count: msgs.length });
+      } catch (e) {
+        out.push({ chatId: c.id, title: chatTitle(c), error: e instanceof Error ? e.message.split('\n')[0] : String(e), count: msgs.length });
+        if (/rejected the key|\b401\b|\b403\b/i.test(String(e))) break; // the same for every group
+      }
+      setAllResults([...out]);
+    }
+    setAllBusy(null);
+    await refreshChats();
+    const ok = out.filter((x) => !x.error).length;
+    if (document.hidden && ok) notifyText(settings, 'Summaries ready', `${ok} group${ok === 1 ? '' : 's'} summarized.`);
+  };
+
   return (
     <RemindersContext.Provider value={settings.reminders ?? DEFAULT_REMINDERS}>
     <div className="app">
@@ -389,6 +416,10 @@ export default function App() {
         {view.name === 'chats' && (
           <ChatList
             chats={chats}
+            allBusy={allBusy}
+            allResults={allResults}
+            onSummarizeAll={summarizeAll}
+            onCloseResults={() => setAllResults(null)}
             syncOn={syncOn || chats.some((c) => c.auto)}
             onImport={importFiles}
             onOpen={(id) => setView({ name: 'chat', id })}
@@ -465,14 +496,24 @@ function CaptureHint({ onOpen }: { onOpen: () => void }) {
 
 // ---------------- Chat list ----------------
 
+type AllResult = { chatId: string; title: string; headline?: string; error?: string; count: number };
+
 function ChatList({
   chats,
+  allBusy,
+  allResults,
+  onSummarizeAll,
+  onCloseResults,
   syncOn,
   onImport,
   onOpen,
   onLiveSync,
 }: {
   chats: StoredChat[];
+  allBusy: string | null;
+  allResults: AllResult[] | null;
+  onSummarizeAll: () => void;
+  onCloseResults: () => void;
   syncOn: boolean;
   onImport: (f: File[]) => void;
   onOpen: (id: string) => void;
@@ -535,9 +576,41 @@ function ChatList({
           )}
         </div>
   );
+  const withNew = chats.filter((c) => newMessages(c).length).length;
   const groupList = (
     <>
         {chats.length > 0 && <h2 className="list-title">Your groups</h2>}
+        {chats.length > 1 && (
+          <div className="card summarize-all">
+            <div className="row">
+              <button className="primary" disabled={!!allBusy || !withNew} onClick={onSummarizeAll}>
+                {allBusy ? 'Summarizing…' : 'Summarize all'}
+              </button>
+              <span className="small muted" style={{ flex: '1 1 160px' }}>
+                {allBusy ?? (withNew ? `${withNew} group${withNew === 1 ? ' has' : 's have'} new messages since the last summary` : 'No new messages since the last summaries')}
+              </span>
+            </div>
+            {allResults && allResults.length > 0 && (
+              <>
+                <ul className="all-results">
+                  {allResults.map((r) => (
+                    <li key={r.chatId}>
+                      <button className="link inline" onClick={() => onOpen(r.chatId)}>
+                        {r.title}
+                      </button>
+                      {r.error ? <span className="small warn"> · not summarized: {r.error}</span> : <span dir="auto"> · {r.headline}</span>}
+                    </li>
+                  ))}
+                </ul>
+                {!allBusy && (
+                  <button className="link inline small" onClick={onCloseResults}>
+                    Hide
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+        )}
         <ul className="chats">
           {list.map((c) => {
             const first = c.messages[0]?.ts;
@@ -545,9 +618,9 @@ function ChatList({
             return (
               <li key={c.id}>
                 <button onClick={() => onOpen(c.id)}>
-                  <span className="avatar">{c.name.slice(0, 1).toUpperCase()}</span>
+                  <span className="avatar">{chatTitle(c).slice(0, 1).toUpperCase()}</span>
                   <span className="grow">
-                    <span className="name">{c.name}</span>
+                    <span className="name" dir="auto">{chatTitle(c)}</span>
                     <span className="muted small">
                       {c.messages.length ? `${c.messages.length} messages · ${fmtDay(first!)} to ${fmtDay(last!)}` : 'Messages cleared, digests kept'}
                     </span>
@@ -619,6 +692,7 @@ function ChatView(props: {
   const [range, setRange] = useState<Range>('7');
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -648,36 +722,9 @@ function ChatView(props: {
     setError(null);
     setBusy('Summarizing…');
     try {
-      const { summarize } = await providers();
-      let usedModel = settings.model;
-      const digest = await summarize(
-        settings,
-        {
-          chatName: chat.name,
-          messages: selected,
-          focus: chat.focus,
-          language: settings.language,
-          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        },
-        setBusy,
-        (m) => (usedModel = m),
-      );
-      const rec: StoredDigest = {
-        id: newId(),
-        chatId: chat.id,
-        createdAt: Date.now(),
-        from: selected[0].ts,
-        to: selected[selected.length - 1].ts,
-        messageCount: selected.length,
-        model: `${settings.provider}/${usedModel}`,
-        digest,
-      };
-      await putDigest(rec);
-      const updated = { ...chat, lastDigestEnd: Math.max(chat.lastDigestEnd ?? 0, rec.to) };
-      await putChat(updated);
+      const { rec, chat: updated } = await summarizeChat(settings, chat, selected, setBusy);
       setChat(updated);
       setDigests([rec, ...digests]);
-      notifyDone(settings, chat.name, digest);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -685,8 +732,17 @@ function ChatView(props: {
     }
   };
 
+  const rename = async (alias: string) => {
+    const a = alias.trim().slice(0, 80);
+    const updated = { ...chat, alias: a && a !== chat.name ? a : undefined };
+    await putChat(updated);
+    setChat(updated);
+    setRenaming(false);
+    onChanged();
+  };
+
   const remove = async () => {
-    if (!window.confirm(`Delete "${chat.name}" and its digests from this device?`)) return;
+    if (!window.confirm(`Delete "${chatTitle(chat)}" and its digests from this device?`)) return;
     await deleteChat(chat.id);
     onChanged();
     onBack();
@@ -697,7 +753,42 @@ function ChatView(props: {
       <button className="link" onClick={onBack}>
         ‹ All groups
       </button>
-      <h1>{chat.name}</h1>
+      {renaming ? (
+        <form
+          className="rename"
+          onSubmit={(e) => {
+            e.preventDefault();
+            rename(String(new FormData(e.currentTarget).get('alias') ?? ''));
+          }}
+        >
+          <label>
+            Name in Nutshell
+            <input name="alias" defaultValue={chatTitle(chat)} autoFocus maxLength={80} dir="auto" />
+          </label>
+          <div className="row">
+            <button className="primary" type="submit">
+              Save
+            </button>
+            <button type="button" onClick={() => setRenaming(false)}>
+              Cancel
+            </button>
+            {chat.alias && (
+              <button type="button" className="link inline" onClick={() => rename('')}>
+                Use the WhatsApp name
+              </button>
+            )}
+          </div>
+          <p className="small muted">Only changes the name here. WhatsApp and the other people in the group don't see it.</p>
+        </form>
+      ) : (
+        <div className="title-row">
+          <h1 dir="auto">{chatTitle(chat)}</h1>
+          <button className="link inline small" onClick={() => setRenaming(true)}>
+            Rename
+          </button>
+        </div>
+      )}
+      {chat.alias && !renaming && <p className="muted small" dir="auto">WhatsApp name: {chat.name}</p>}
       <p className="muted small">
         {chat.messages.length} messages stored
         {chat.lastDigestEnd ? ` · last digest covered up to ${fmtDate(chat.lastDigestEnd)}` : ''}
@@ -758,7 +849,7 @@ function ChatView(props: {
       </div>
 
       {digests.map((d, i) => (
-        <DigestCard key={d.id} rec={d} chatName={chat.name} open={i === 0} onToast={onToast} />
+        <DigestCard key={d.id} rec={d} chatName={chatTitle(chat)} open={i === 0} onToast={onToast} />
       ))}
 
       <button className="danger link" onClick={remove}>
@@ -766,6 +857,56 @@ function ChatView(props: {
       </button>
     </section>
   );
+}
+
+/** Messages "Summarize all" covers: new since the last digest, or the last 7 days for a group never summarized. */
+function newMessages(c: StoredChat) {
+  const msgs = c.messages;
+  if (!msgs.length) return [];
+  if (c.lastDigestEnd) return msgs.filter((m) => m.ts > c.lastDigestEnd!);
+  const from = msgs[msgs.length - 1].ts - 7 * 864e5;
+  return msgs.filter((m) => m.ts >= from);
+}
+
+/** Summarize these messages of one group, save the digest and move the group's "last digest" mark. */
+async function summarizeChat(settings: AppSettings, chat: StoredChat, selected: StoredChat['messages'], onProgress?: (s: string) => void) {
+  const { summarize } = await providers();
+  let usedModel = settings.model;
+  const digest = await summarize(
+    settings,
+    {
+      chatName: chatTitle(chat),
+      messages: selected,
+      focus: chat.focus,
+      language: settings.language,
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    },
+    onProgress ?? (() => undefined),
+    (m) => (usedModel = m),
+  );
+  const rec: StoredDigest = {
+    id: newId(),
+    chatId: chat.id,
+    createdAt: Date.now(),
+    from: selected[0].ts,
+    to: selected[selected.length - 1].ts,
+    messageCount: selected.length,
+    model: `${settings.provider}/${usedModel}`,
+    digest,
+  };
+  await putDigest(rec);
+  // Re-read the group: new messages may have synced while the AI was working.
+  const fresh = (await getChat(chat.id)) ?? chat;
+  const updated = { ...fresh, focus: chat.focus, alias: chat.alias, lastDigestEnd: Math.max(fresh.lastDigestEnd ?? 0, rec.to) };
+  await putChat(updated);
+  if (onProgress) notifyDone(settings, chatTitle(chat), digest); // one group at a time; Summarize all sends one note at the end
+  return { rec, chat: updated };
+}
+
+async function notifyText(settings: AppSettings, title: string, body: string) {
+  if (!settings.notify || !('Notification' in window) || Notification.permission !== 'granted') return;
+  const reg = await navigator.serviceWorker?.getRegistration();
+  reg?.showNotification(title, { body, icon: './pwa-192x192.png', tag: 'summarize-all' });
 }
 
 async function notifyDone(settings: AppSettings, chatName: string, d: Digest) {

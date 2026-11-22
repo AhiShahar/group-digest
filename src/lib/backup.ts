@@ -100,7 +100,7 @@ export async function restoreFromKey(text: string, relay = RELAY_URL): Promise<{
     const same = here.find((h) => h.name === c.name);
     if (same) {
       idMap.set(c.id, same.id);
-      await putChat({ ...same, messages: mergeMessages(same.messages, c.messages), lastDigestEnd: Math.max(same.lastDigestEnd ?? 0, c.lastDigestEnd ?? 0) || null, focus: same.focus || c.focus });
+      await putChat({ ...same, messages: mergeMessages(same.messages, c.messages), lastDigestEnd: Math.max(same.lastDigestEnd ?? 0, c.lastDigestEnd ?? 0) || null, focus: same.focus || c.focus, alias: same.alias || c.alias });
     } else {
       idMap.set(c.id, c.id);
       await putChat(c);

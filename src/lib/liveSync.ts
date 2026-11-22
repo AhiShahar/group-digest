@@ -49,9 +49,12 @@ export interface SyncPairing {
 
 export interface DigestSchedule {
   on: boolean;
-  freq: 'daily' | 'weekly';
+  freq: 'daily' | 'twice' | 'weekly';
   hour: number;
   minute: number;
+  /** Twice a day: the second time. */
+  hour2?: number;
+  minute2?: number;
   weekday: number; // 0 = Sunday
   tz: string;
   groups: string[]; // empty = every synced group
@@ -65,11 +68,21 @@ export const DEFAULT_SCHEDULE: DigestSchedule = {
   freq: 'daily',
   hour: 20,
   minute: 0,
+  hour2: 18,
+  minute2: 0,
   weekday: 0,
   tz: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
   groups: [],
   models: [],
 };
+
+/** a < b for versions like 0.5.10 (numeric, not string order). */
+export function olderThan(a: string, b: string): boolean {
+  const x = a.split('.').map(Number);
+  const y = b.split('.').map(Number);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0);
+  return false;
+}
 
 /** AI providers the sync server can call by itself (a local Ollama on this computer it cannot reach). */
 export function serverCanUse(s: ProviderSettings): boolean {

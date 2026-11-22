@@ -35,7 +35,7 @@ import makeWASocket, { Browsers, DisconnectReason, fetchLatestBaileysVersion, us
 import { deriveKeys, hostInbox, importHostKey, newHostKey, open, openSealed, seal } from './crypto.mjs';
 import { toRecord } from './parse.mjs';
 
-const VERSION = '0.5.2';
+const VERSION = '0.5.3';
 const SELF = fileURLToPath(import.meta.url);
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 
@@ -114,7 +114,7 @@ if (!process.env.GD_CHILD && getHeapStatistics().heap_size_limit / 2 ** 20 < wan
 }
 
 async function main() {
-  const { duePeriod, friendlyAiError, summarizeGroup } = await loadModule('digest.mjs');
+  const { duePeriod, friendlyAiError, localParts, summarizeGroup } = await loadModule('digest.mjs');
   const backup = await loadModule('backup.mjs');
   const { Limiter, jitter, makeReadOnly, reconnectDelay } = await loadModule('hygiene.mjs');
   const { Activity } = await loadModule('activity.mjs');
@@ -378,7 +378,7 @@ async function main() {
         }
         await new Promise((r) => setTimeout(r, 3000)); // gentle on free AI limits
       }
-      const label = test ? 'Test digest' : d.freq === 'weekly' ? 'Weekly digest' : 'Daily digest';
+      const label = test ? 'Test digest' : d.freq === 'weekly' ? 'Weekly digest' : d.freq === 'twice' ? (localParts(Date.now(), d.tz).hour < 12 ? 'Morning digest' : 'Evening digest') : 'Daily digest';
       if (out.length) {
         await relay(this.keys, 'POST', 'messages', { blob: await seal(this.keys, 'messages', { v: 2, messages: [], digests: out }) });
         const lines = out.map((x) => `${x.chat}: ${x.digest.headline}`);

@@ -28,6 +28,13 @@ describe('scheduled digests on the sync server', () => {
     const weekly = { ...daily, freq: 'weekly', weekday: 0 }; // Sunday
     expect(server.duePeriod(weekly, Date.UTC(2026, 10, 20, 19))).toBeNull(); // Friday
     expect(server.duePeriod(weekly, Date.UTC(2026, 10, 22, 19))).toBe('2026-11-22');
+    // Twice a day, 6 AM and 6 PM in Sydney (UTC+11 in November).
+    const twice = { on: true, freq: 'twice', hour: 6, minute: 0, hour2: 18, minute2: 0, weekday: 0, tz: 'Australia/Sydney' };
+    expect(server.duePeriod(twice, Date.UTC(2026, 10, 21, 18, 59))).toBeNull(); // 05:59 on the 22nd
+    expect(server.duePeriod(twice, Date.UTC(2026, 10, 21, 19, 0))).toBe('2026-11-22a'); // 06:00
+    expect(server.duePeriod(twice, Date.UTC(2026, 10, 22, 6, 59))).toBe('2026-11-22a'); // 17:59
+    expect(server.duePeriod(twice, Date.UTC(2026, 10, 22, 7, 0))).toBe('2026-11-22b'); // 18:00
+    expect(server.duePeriod({ ...twice, hour: 18, hour2: 6 }, Date.UTC(2026, 10, 22, 7, 0))).toBe('2026-11-22b'); // times in either order
   });
 
   it('shapes loose model output into a digest the app accepts', () => {

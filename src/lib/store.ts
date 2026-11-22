@@ -16,6 +16,8 @@ export interface StoredChat {
   lastDigestEnd: number | null; // ts of the last message covered by a digest
   /** Messages arrive by themselves (live sync or Android capture), so no export nudges. */
   auto?: boolean;
+  /** The person's own name for the group in Nutshell. `name` stays WhatsApp's, for matching new messages. */
+  alias?: string;
 }
 
 export interface StoredDigest {

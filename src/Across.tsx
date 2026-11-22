@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { askContext, askPrompt, overview, search, type Answer } from './lib/ask';
 import { DecisionCards } from './Decisions';
 import { providerInfo } from './lib/providerInfo';
+import { chatTitle } from './lib/title';
 import { allDigests, getKv, setKv, type AppSettings, type StoredChat, type StoredDigest } from './lib/store';
 
 const DONE = 'doneTodos';
@@ -58,7 +59,7 @@ export default function Across({
   const ov = useMemo(() => overview(chats, digests, localDay()), [chats, digests]);
   const openTodos = ov.todos.filter((t) => !done.includes(t.key));
   const doneTodos = ov.todos.filter((t) => done.includes(t.key));
-  const byName = new Map(chats.map((c) => [c.name, c.id]));
+  const byName = new Map(chats.flatMap((c) => [[c.name, c.id] as const, [chatTitle(c), c.id] as const]));
 
   const toggle = async (key: string) => {
     const next = done.includes(key) ? done.filter((k) => k !== key) : [...done, key].slice(-500);

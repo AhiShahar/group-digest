@@ -73,13 +73,22 @@ export function buildUserPrompt({ chatName, focus, language, timeZone }, transcr
 /**
  * The period a scheduled digest belongs to, or null when it is not due yet.
  * Daily: every day from the chosen time. Weekly: on the chosen weekday from that time.
+ * Twice a day: from each of the two chosen times (keys end in "a" and "b").
  * A server that was off at the time catches up later the same day.
  */
 export function duePeriod(sched, now = Date.now()) {
   if (!sched || !sched.on) return null;
   const p = localParts(now, sched.tz);
+  const nowMin = p.hour * 60 + p.minute;
   const at = (Number(sched.hour) || 0) * 60 + (Number(sched.minute) || 0);
-  if (p.hour * 60 + p.minute < at) return null;
+  if (sched.freq === 'twice') {
+    const at2 = (Number(sched.hour2 ?? 18) || 0) * 60 + (Number(sched.minute2) || 0);
+    const [first, second] = at <= at2 ? [at, at2] : [at2, at];
+    if (nowMin >= second && second !== first) return `${p.ymd}b`;
+    if (nowMin >= first) return `${p.ymd}a`;
+    return null;
+  }
+  if (nowMin < at) return null;
   if (sched.freq === 'weekly' && p.weekday !== (Number(sched.weekday) || 0)) return null;
   return p.ymd;
 }
