@@ -45,6 +45,7 @@ import {
   type StoredChat,
   type StoredDigest,
 } from './lib/store';
+import { todoKey, toggleDone, useDoneTodos } from './lib/doneTodos';
 
 type View = { name: 'chats' } | { name: 'chat'; id: string } | { name: 'settings' } | { name: 'across' };
 
@@ -984,6 +985,7 @@ function ErrorBox({ message }: { message: string }) {
 function DigestCard({ rec, chatName, open, onToast }: { rec: StoredDigest; chatName: string; open: boolean; onToast: (s: string) => void }) {
   const d = rec.digest;
   const prefs = useReminderPrefs();
+  const done = useDoneTodos();
   const share = async () => {
     const text = digestAsText(chatName, d);
     try {
@@ -1023,14 +1025,23 @@ function DigestCard({ rec, chatName, open, onToast }: { rec: StoredDigest; chatN
       {d.action_items.length > 0 && (
         <>
           <h3>To do</h3>
-          <ul>
-            {d.action_items.map((a, i) => (
-              <li key={i}>
-                {a.task}
-                {a.owner && <span className="pill">{a.owner}</span>}
-                {a.due && <span className="pill">by {a.due}</span>}
-              </li>
-            ))}
+          <ul className="todos">
+            {d.action_items.map((a, i) => {
+              const key = todoKey(rec.chatId, a.task);
+              const isDone = done.includes(key);
+              return (
+                <li key={i} className={isDone ? 'done' : undefined}>
+                  <label className="check">
+                    <input type="checkbox" checked={isDone} onChange={() => toggleDone(key)} aria-label={isDone ? 'Mark as not done' : 'Mark as done'} />
+                    <span>
+                      <span className="task">{a.task}</span>
+                      {a.owner && <span className="pill">{a.owner}</span>}
+                      {a.due && <span className="pill">by {a.due}</span>}
+                    </span>
+                  </label>
+                </li>
+              );
+            })}
           </ul>
         </>
       )}

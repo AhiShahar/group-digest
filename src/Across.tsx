@@ -5,9 +5,9 @@ import { askContext, askPrompt, overview, search, type Answer } from './lib/ask'
 import { DecisionCards } from './Decisions';
 import { providerInfo } from './lib/providerInfo';
 import { chatTitle } from './lib/title';
-import { allDigests, getKv, setKv, type AppSettings, type StoredChat, type StoredDigest } from './lib/store';
+import { toggleDone as toggle, useDoneTodos } from './lib/doneTodos';
+import { allDigests, type AppSettings, type StoredChat, type StoredDigest } from './lib/store';
 
-const DONE = 'doneTodos';
 const localDay = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -43,12 +43,11 @@ export default function Across({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [digests, setDigests] = useState<StoredDigest[]>([]);
-  const [done, setDone] = useState<string[]>([]);
+  const done = useDoneTodos();
   const [showDone, setShowDone] = useState(false);
 
   useEffect(() => {
     allDigests().then(setDigests);
-    getKv<string[]>(DONE).then((d) => setDone(d ?? []));
   }, [chats]);
   useEffect(() => {
     const t = setTimeout(() => setQ(typed), 250);
@@ -60,12 +59,6 @@ export default function Across({
   const openTodos = ov.todos.filter((t) => !done.includes(t.key));
   const doneTodos = ov.todos.filter((t) => done.includes(t.key));
   const byName = new Map(chats.flatMap((c) => [[c.name, c.id] as const, [chatTitle(c), c.id] as const]));
-
-  const toggle = async (key: string) => {
-    const next = done.includes(key) ? done.filter((k) => k !== key) : [...done, key].slice(-500);
-    setDone(next);
-    await setKv(DONE, next);
-  };
 
   const ask = async () => {
     const question = typed.trim();

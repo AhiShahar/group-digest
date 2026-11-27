@@ -124,6 +124,11 @@ input, select {
 .headline { font-weight: 600; font-size: 17px; margin-top: 2px; }
 .digest ul { padding-left: 20px; margin: 4px 0; }
 .digest li { margin: 4px 0; overflow-wrap: anywhere; }
+.digest ul.todos { list-style: none; padding-left: 0; }
+.digest ul.todos .check { align-items: flex-start; padding: 4px 0; font-weight: inherit; }
+.digest ul.todos .check input { margin-top: 2px; }
+.digest ul.todos li.done .task { text-decoration: line-through; }
+.digest ul.todos li.done { opacity: 0.55; }
 .pill { display: inline-block; font-size: 12.5px; background: var(--brand-soft); border-radius: 999px; padding: 1px 8px; margin-left: 6px; }
 .events { list-style: none; padding: 0 !important; }
 .event { display: flex; gap: 12px; justify-content: space-between; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin: 8px 0 !important; }
