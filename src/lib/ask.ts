@@ -5,6 +5,7 @@ import { formatTranscript, type Decision, type DigestEvent } from './digest';
 import type { ChatMessage } from './parser';
 import type { StoredChat, StoredDigest } from './store';
 import { chatTitle } from './title';
+import { todoKey } from './doneTodos';
 
 export const AnswerSchema = z.object({
   answer: z.string().describe('A short, direct answer. Say plainly if the messages do not answer it.'),
@@ -167,7 +168,7 @@ export function overview(chats: StoredChat[], digests: StoredDigest[], today: st
   for (const d of recent) {
     const chat = name.get(d.chatId)!;
     for (const a of d.digest.action_items) {
-      const key = `${d.chatId}|${norm(a.task)}`;
+      const key = todoKey(d.chatId, a.task);
       todos.set(key, { key, chatId: d.chatId, chat, task: a.task, owner: a.owner, due: a.due, from: d.createdAt });
     }
     for (const e of d.digest.events) {
